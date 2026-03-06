@@ -33,11 +33,12 @@ if [[ "true" == "${REBUILD}" ]]; then
   podman image rm agent-base
   podman image rm ${AGENT}
 fi
+cd "${PROJ_DIR}/agents"
 if ! podman image exists agent-base; then
-  podman build -t agent-base -f Containerfile.base "${PROJ_DIR}/agents"
+  podman build -t agent-base -f Containerfile.base .
 fi
 if ! podman image exists "$IMAGE_NAME"; then
-  podman build -t ${AGENT} -f Containerfile.${AGENT} "${PROJ_DIR}/agents"
+  podman build -t ${AGENT} -f Containerfile.${AGENT} .
 fi
 
 #podman run -it --rm -v ./:/app ${IMAGE_NAME} /root/.local/bin/claude --model "${MODEL}"
