@@ -1,0 +1,6 @@
+FROM agent-base
+
+# Install codex
+RUN npm i -g @openai/codex
+
+WORKDIR /app

@@ -1,0 +1,14 @@
+[model_providers.ollama]
+name = "Ollama"
+base_url = "http://host.containers.internal:11434/v1"
+wire_api = "openai-v1"
+
+# Set the default model for agentic tasks
+default_model = "gpt-oss-64k:20b"
+
+[[model_metadata]]
+name = "gpt-oss-64k:20b"
+family = "gptoss"
+context_window = 65536
+supports_tools = true
+tokenizer_type = "llama3" # or the specific tokenizer for gpt-oss

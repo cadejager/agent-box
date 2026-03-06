@@ -1,7 +1,4 @@
-FROM docker.io/debian:stable-slim
-
-# Install Software
-RUN apt-get update; apt-get install -y curl git python3 pip gcc g++ gdb valgrind cmake rust-all
+FROM agent-base
 
 # Install claude-code
 RUN curl -fsSL https://claude.ai/install.sh | bash
