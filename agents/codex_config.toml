@@ -1,14 +1,8 @@
-[model_providers.ollama]
-name = "Ollama"
+model = "gpt-oss-64k:20b"
+model_provider = "openai" # Force it to use the OpenAI logic
+
+[model_providers.openai]
+name = "openai"
+# By naming this 'openai', we hijack the standard 'base_url' logic
 base_url = "http://host.containers.internal:11434/v1"
-wire_api = "openai-v1"
-
-# Set the default model for agentic tasks
-default_model = "gpt-oss-64k:20b"
-
-[[model_metadata]]
-name = "gpt-oss-64k:20b"
-family = "gptoss"
-context_window = 65536
-supports_tools = true
-tokenizer_type = "llama3" # or the specific tokenizer for gpt-oss
+api_key = "ollama"
