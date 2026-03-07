@@ -2,6 +2,7 @@
 #
 # Launches/updates an AI agent
 
+# The default model to use
 MODEL="gpt-oss-64k:20b"
 
 # This gets the dir of the project
@@ -41,23 +42,20 @@ if ! podman image exists "$IMAGE_NAME"; then
   podman build -t ${AGENT} -f Containerfile.${AGENT} .
 fi
 
-#podman run -it --rm -v ./:/app ${IMAGE_NAME} /root/.local/bin/claude --model "${MODEL}"
 if [[ "claude-code" == ${AGENT} ]]; then
   podman run -it --rm -v ./:/app ${AGENT} /root/.local/bin/claude --model "${MODEL}"
 elif [[ "codex" == ${AGENT} ]]; then
-  #podman run -it --rm -v ./:/app -v "${PROJ_DIR}/agents/codex_config.toml":/root/.codex/config.toml ${AGENT} /usr/local/bin/codex
-  podman run -it --rm -v ./:/app -v "${PROJ_DIR}/agents/codex_config.toml":/root/.codex/config.toml ${AGENT} /bin/bash
+  podman run -it --rm -v ./:/app -v "${PROJ_DIR}/agents/codex_config.toml":/root/.codex/config.toml ${AGENT} /usr/local/bin/codex --model "${MODEL}"
 elif [[ "opencode" == ${AGENT} ]]; then
-  mkdir -p "${PROJ_DIR}/agents/opencode"
   curl -s http://localhost:11434/api/tags | jq '{
     "$schema": "https://opencode.ai/config.json",
     "provider": {
-      "ollama": {
+      "ollama-container": {
         "npm": "@ai-sdk/openai-compatible",
         "options": { "baseURL": "http://host.containers.internal:11434/v1" },
         "models": ([.models[] | {key: .name, value: {name: .name, tools: true}}] | from_entries)
       }
     }
   }' > "${PROJ_DIR}/agents/opencode.json"
-  podman run -it --rm -v ./:/app -v "${PROJ_DIR}/agents/opencode.json":/root/.config/opencode/opencode.json ${AGENT} /root/.opencode/bin/opencode
+  podman run -it --rm -v ./:/app -v "${PROJ_DIR}/agents/opencode.json":/root/.config/opencode/opencode.json ${AGENT} /usr/local/bin/opencode --model "ollama-container/${MODEL}"
 fi
