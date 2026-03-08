@@ -1,7 +1,7 @@
 services:
   ollama:
     container_name: ollama
-    image: docker.io/ollama/ollama:latest
+    image: ollama/ollama:latest
     devices:
       - /dev/kfd
       - /dev/dri
