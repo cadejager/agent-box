@@ -34,28 +34,40 @@ if [[ "true" == "${REBUILD}" ]]; then
   podman image rm agent-base
   podman image rm ${AGENT}
 fi
-cd "${PROJ_DIR}/agents"
+pushd "${PROJ_DIR}/agents"
 if ! podman image exists agent-base; then
   podman build -t agent-base -f Containerfile.base .
 fi
-if ! podman image exists "$IMAGE_NAME"; then
+if ! podman image exists "${AGENT}"; then
+  rm -rf certs
+  mkdir certs
+  cp ${HOME}/.local/share/certs/* certs/
   podman build -t ${AGENT} -f Containerfile.${AGENT} .
 fi
+popd
 
 if [[ "claude-code" == ${AGENT} ]]; then
   podman run -it --rm -v ./:/app ${AGENT} /root/.local/bin/claude --model "${MODEL}"
 elif [[ "codex" == ${AGENT} ]]; then
   podman run -it --rm -v ./:/app -v "${PROJ_DIR}/agents/codex_config.toml":/root/.codex/config.toml ${AGENT} /usr/local/bin/codex --model "${MODEL}"
 elif [[ "opencode" == ${AGENT} ]]; then
-  curl -s http://localhost:11434/api/tags | jq '{
-    "$schema": "https://opencode.ai/config.json",
-    "provider": {
-      "ollama-container": {
-        "npm": "@ai-sdk/openai-compatible",
-        "options": { "baseURL": "http://host.containers.internal:11434/v1" },
-        "models": ([.models[] | {key: .name, value: {name: .name, tools: true}}] | from_entries)
-      }
-    }
-  }' > "${PROJ_DIR}/agents/opencode.json"
-  podman run -it --rm -v ./:/app -v "${PROJ_DIR}/agents/opencode.json":/root/.config/opencode/opencode.json ${AGENT} /usr/local/bin/opencode --model "ollama-container/${MODEL}"
+  # ~/.config/opencode/opencode.json and ~/.local/share/opencode/auth.json need to be crated for
+  # this to work.
+  #
+  # auth.json can be populated within opencode by using `/connect`
+  # 
+  # opencode.json needs to be configured for each endpoint
+  # avaiable models can be gotten with commands like:
+  # Ollama: `curl http://localhost:11434/api/tags`
+  # LiteLLM: `curl https://hostname/v1/models -H "Authorization: Bearer TOKEN"`
+  #
+  # Configuration examples are avaiable here:
+  # https://opencode.ai/docs/providers
+  #
+  # baseurl should be http://host.containers.internal if Ollama is running in another container
+
+  podman run -it --rm -v ./:/app \
+    -v "${HOME}/.config/opencode/opencode.json":/root/.config/opencode/opencode.json \
+    -v "${HOME}/.local/share/opencode/auth.json":/root/.local/share/opencode/auth.json \
+    ${AGENT} /usr/local/bin/opencode
 fi
