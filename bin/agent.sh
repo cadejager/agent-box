@@ -69,5 +69,7 @@ elif [[ "opencode" == ${AGENT} ]]; then
   podman run -it --rm -v ./:/app \
     -v "${HOME}/.config/opencode/opencode.json":/root/.config/opencode/opencode.json \
     -v "${HOME}/.local/share/opencode/auth.json":/root/.local/share/opencode/auth.json \
+    -e OPENCODE_ENABLE_EXA=1 \
+    -e OPENCODE_EXPERIMENTAL_LSP_TOOL=true \
     ${AGENT} /usr/local/bin/opencode
 fi
