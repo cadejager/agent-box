@@ -1,4 +1,4 @@
-FROM docker.io/node:jod-trixie-slim
+FROM docker.io/node:trixie
 
 # Install Software
 RUN apt-get update; apt-get install -y curl git python3 pip gcc g++ gdb valgrind cmake rust-all
