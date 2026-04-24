@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Controls the ollama instance
+# Controls the localai instance
 
 # This gets the dir of the project
 PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
-cd "${PROJ_DIR}/ollama"
+cd "${PROJ_DIR}/localai"
 
 # Get Args
 usage() {
@@ -35,10 +35,10 @@ down() {
   podman-compose down
 }
 attach() {
-  if [[ "$(podman inspect ollama -f '{{.State.Running}}' 2>/dev/null)"  != "true" ]]; then
+  if [[ "$(podman inspect localai -f '{{.State.Running}}' 2>/dev/null)"  != "true" ]]; then
     up
   fi
-  podman exec -it ollama /bin/bash
+  podman exec -it localai /bin/bash
 }
 
 case "${COMMAND}" in
