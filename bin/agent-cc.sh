@@ -90,7 +90,8 @@ elif [[ "opencode" == ${AGENT} ]]; then
   # Note: Charliecloud doesn't have the same host.containers.internal feature as Podman
   # You may need to use the host's actual IP address or use --join-ns for networking
 
-  ch-run -b "${PROJ_DIR}":/app \
+  ch-run --write \
+    -b "${PROJ_DIR}":/app \
     -b "${HOME}/.config/opencode":/root/.config/opencode \
     -b "${HOME}/.local/share/opencode":/root/.local/share/opencode \
     --set-env=OPENCODE_ENABLE_EXA=1 \
