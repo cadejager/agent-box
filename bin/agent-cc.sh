@@ -92,8 +92,8 @@ elif [[ "opencode" == ${AGENT} ]]; then
 
   ch-run --write \
     -b "${PROJ_DIR}":/app \
-    -b "${HOME}/.config/opencode":/root/.config/opencode \
-    -b "${HOME}/.local/share/opencode":/root/.local/share/opencode \
+    -v "${HOME}/.config/opencode/opencode.json":/root/.config/opencode/opencode.json \
+    -v "${HOME}/.local/share/opencode/auth.json":/root/.local/share/opencode/auth.json \
     --set-env=OPENCODE_ENABLE_EXA=1 \
     --set-env=OPENCODE_EXPERIMENTAL_LSP_TOOL=true \
     --cd /app \
