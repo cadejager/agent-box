@@ -91,8 +91,8 @@ elif [[ "opencode" == ${AGENT} ]]; then
   # You may need to use the host's actual IP address or use --join-ns for networking
 
   ch-run -b "${PROJ_DIR}":/app \
-    -b "${HOME}/.config/opencode/opencode.json":/root/.config/opencode/opencode.json \
-    -b "${HOME}/.local/share/opencode/auth.json":/root/.local/share/opencode/auth.json \
+    -b "${HOME}/.config/opencode":/root/.config/opencode \
+    -b "${HOME}/.local/share/opencode":/root/.local/share/opencode \
     --set-env=OPENCODE_ENABLE_EXA=1 \
     --set-env=OPENCODE_EXPERIMENTAL_LSP_TOOL=true \
     --cd /app \
