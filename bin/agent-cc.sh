@@ -36,11 +36,11 @@ fi
 AGENT="${1}"
 
 if [[ "true" == "${REBUILD}" ]]; then
-  rm -rf "${CH_STORAGE}/agent-base"
   rm -rf "${CH_STORAGE}/${AGENT}"
+  rm -rf "${CH_STORAGE}/agent-base"
   # Also remove from ch-image storage if exists
-  ch-image delete agent-base 2>/dev/null || true
   ch-image delete ${AGENT} 2>/dev/null || true
+  ch-image delete agent-base 2>/dev/null || true
 fi
 
 pushd "${PROJ_DIR}/agents"
