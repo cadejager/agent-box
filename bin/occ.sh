@@ -93,7 +93,7 @@ elif [[ "${CONTAINER_TYPE}" == "charliecloud" ]]; then
 
   pushd "${PROJ_DIR}/agents" > /dev/null
   if [[ ! -d "${CH_STORAGE}/agent-base" ]]; then
-    ch-image build -t agent-base -f Containerintainerfile.base .
+    ch-image build -t agent-base -f Containerfile.base .
     ch-convert -i ch-image -o dir agent-base "${CH_STORAGE}/agent-base"
   fi
   if [[ ! -d "${CH_STORAGE}/opencode" ]]; then
