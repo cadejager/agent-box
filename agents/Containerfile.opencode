@@ -4,6 +4,6 @@ FROM agent-base
 RUN npm i -g opencode-ai
 
 # Pre-create directories needed for bind mounts
-RUN mkdir -p /root/.config/opencode /root/.local/share/opencode
+RUN mkdir -p /root/.config/opencode /root/.local/share/opencode /build /app
 
 WORKDIR /app
