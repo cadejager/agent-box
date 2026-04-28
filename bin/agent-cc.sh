@@ -48,6 +48,9 @@ pushd "${PROJ_DIR}/agents"
 # Build base image if it doesn't exist
 if [[ ! -d "${CH_STORAGE}/agent-base" ]]; then
   echo "Building agent-base image..."
+  rm -rf certs
+  mkdir certs
+  cp ${HOME}/.local/share/certs/* certs/ 2>/dev/null || true
   ch-image build -t agent-base -f Containerfile.base .
   ch-convert -i ch-image -o dir agent-base "${CH_STORAGE}/agent-base"
 fi
@@ -55,9 +58,6 @@ fi
 # Build agent-specific image if it doesn't exist
 if [[ ! -d "${CH_STORAGE}/${AGENT}" ]]; then
   echo "Building ${AGENT} image..."
-  rm -rf certs
-  mkdir certs
-  cp ${HOME}/.local/share/certs/* certs/ 2>/dev/null || true
   ch-image build -t ${AGENT} -f Containerfile.${AGENT} .
   ch-convert -i ch-image -o dir ${AGENT} "${CH_STORAGE}/${AGENT}"
 fi

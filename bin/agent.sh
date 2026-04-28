@@ -36,12 +36,12 @@ if [[ "true" == "${REBUILD}" ]]; then
 fi
 pushd "${PROJ_DIR}/agents"
 if ! podman image exists agent-base; then
-  podman build -t agent-base -f Containerfile.base .
-fi
-if ! podman image exists "${AGENT}"; then
   rm -rf certs
   mkdir certs
   cp ${HOME}/.local/share/certs/* certs/
+  podman build -t agent-base -f Containerfile.base .
+fi
+if ! podman image exists "${AGENT}"; then
   podman build -t ${AGENT} -f Containerfile.${AGENT} .
 fi
 popd
