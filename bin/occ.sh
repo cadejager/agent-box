@@ -33,10 +33,10 @@ done
 
 # Determine container type if not specified
 if [[ -z "${CONTAINER_TYPE}" ]]; then
-  if command -v podman >/dev/null 2>&1; then
-    CONTAINER_TYPE="podman"
-  elif command -v ch-run >/dev/null 2>&1; then
+  if command -v ch-run >/dev/null 2>&1; then
     CONTAINER_TYPE="charliecloud"
+  elif command -v podman >/dev/null 2>&1; then
+    CONTAINER_TYPE="podman"
   else
     echo "Error: No supported container engine (podman or charliecloud) found."
     exit 1
