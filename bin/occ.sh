@@ -71,8 +71,8 @@ if [[ "${CONTAINER_TYPE}" == "podman" ]]; then
   if [[ -n "${BUILD_DIR}" ]]; then
     CMD="${CMD} -v ${BUILD_DIR}:/build"
   fi
-  CMD="${CMD} -v ${HOME}/.config/opencode/opencode.json:/root/.config/opencode/opencode.json \
-    -v ${HOME}/.local/share/opencode/auth.json:/root/.local/share/opencode/auth.json \
+  CMD="${CMD} -v ${HOME}/.config/opencode/:/root/.config/opencode/ \
+    -v ${HOME}/.local/share/opencode/:/root/.local/share/opencode/ \
     -e OPENCODE_ENABLE_EXA=1 \
     -e OPENCODE_EXPERIMENTAL_LSP_TOOL=true \
     opencode /usr/local/bin/opencode"
@@ -109,8 +109,8 @@ elif [[ "${CONTAINER_TYPE}" == "charliecloud" ]]; then
   if [[ -n "${BUILD_DIR}" ]]; then
     CMD="${CMD} -b ${BUILD_DIR}:/build"
   fi
-  CMD="${CMD} -b ${HOME}/.config/opencode/opencode.json:/root/.config/opencode/opencode.json \
-    -b ${HOME}/.local/share/opencode/auth.json:/root/.local/share/opencode/auth.json \
+  CMD="${CMD} -b ${HOME}/.config/opencode/:/root/.config/opencode/ \
+    -b ${HOME}/.local/share/opencode/:/root/.local/share/opencode/ \
     --set-env=OPENCODE_ENABLE_EXA=1 \
     --set-env=OPENCODE_EXPERIMENTAL_LSP_TOOL=true \
     --cd /app \
