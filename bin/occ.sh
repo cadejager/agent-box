@@ -10,22 +10,34 @@ APP_DIR=$(pwd)
 BUILD_DIR=""
 CONTAINER_TYPE=""
 REBUILD=false
+CONTINUE=false
+SESSION=""
+FORK=false
 
 usage() {
-  echo "Usage: ${0} [-a APP_DIR] [-b BUILD_DIR] [-c TYPE] [-r] [-h]"
-  echo "  -a       The application directory to bind to /app (default: current dir)"
-  echo "  -b       The build directory to bind to /build"
-  echo "  -c       The container engine to use (podman or charliecloud)"
-  echo "  -r       Rebuild images"
+  echo "Usage: ${0} [-a APP_DIR] [-b BUILD_DIR] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h]"
+  echo "  Container args:"
+  echo "    -a       The application directory to bind to /app (default: current dir)"
+  echo "    -b       The build directory to bind to /build"
+  echo "    -r       Rebuild images"
+  echo "    -t       The container engine to use (podman or charliecloud)"
+  echo "  Opencode args:"
+  echo "    -c       Continue the last session"
+  echo "    -s       Continue a specific session by ID"
+  echo "    -f       Fork the session (use with -c or -s)"
+  echo ""
   echo "  -h       Display this message"
   exit 1
 }
 
-while getopts "a:b:c:rh" opt; do
+while getopts "a:b:t:cs:frh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     b) BUILD_DIR=$OPTARG ;;
-    c) CONTAINER_TYPE=$OPTARG ;;
+    t) CONTAINER_TYPE=$OPTARG ;;
+    c) CONTINUE=true ;;
+    s) SESSION=$OPTARG ;;
+    f) FORK=true ;;
     r) REBUILD=true ;;
     h|?) usage ;;
   esac
@@ -47,6 +59,18 @@ fi
 APP_DIR=$(realpath "$APP_DIR")
 if [[ -n "${BUILD_DIR}" ]]; then
   BUILD_DIR=$(realpath "$BUILD_DIR")
+fi
+
+# Build opencode arguments
+OPENCODE_ARGS=""
+if [[ "${CONTINUE}" == "true" ]]; then
+  OPENCODE_ARGS="${OPENCODE_ARGS} --continue"
+fi
+if [[ -n "${SESSION}" ]]; then
+  OPENCODE_ARGS="${OPENCODE_ARGS} --session ${SESSION}"
+fi
+if [[ "${FORK}" == "true" ]]; then
+  OPENCODE_ARGS="${OPENCODE_ARGS} --fork"
 fi
 
 if [[ "${CONTAINER_TYPE}" == "podman" ]]; then
@@ -75,7 +99,7 @@ if [[ "${CONTAINER_TYPE}" == "podman" ]]; then
     -v ${HOME}/.local/share/opencode/:/root/.local/share/opencode/ \
     -e OPENCODE_ENABLE_EXA=1 \
     -e OPENCODE_EXPERIMENTAL_LSP_TOOL=true \
-    opencode /usr/local/bin/opencode"
+    opencode /usr/local/bin/opencode${OPENCODE_ARGS}"
   
   eval "${CMD}"
 
@@ -114,7 +138,7 @@ elif [[ "${CONTAINER_TYPE}" == "charliecloud" ]]; then
     --set-env=OPENCODE_ENABLE_EXA=1 \
     --set-env=OPENCODE_EXPERIMENTAL_LSP_TOOL=true \
     --cd /app \
-    ${CH_STORAGE}/opencode -- /usr/local/bin/opencode"
+    ${CH_STORAGE}/opencode -- /usr/local/bin/opencode${OPENCODE_ARGS}"
   
   eval "${CMD}"
 
