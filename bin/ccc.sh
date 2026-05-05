@@ -15,19 +15,21 @@ PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
 
 # Defaults
 APP_DIR=$(pwd)
-BUILD_DIR=""
 CONTAINER_TYPE=""
 REBUILD=false
 CONTINUE=false
 EFFORT=""
 SESSION=""
 FORK=false
+VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a APP_DIR] [-b BUILD_DIR] [-t TYPE] [-c]  [-e EFFORT] [-s SESSION] [-f] [-r] [-h]"
+  echo "Usage: ${0} [-a APP_DIR] [-v VOLUME] [-t TYPE] [-c]  [-e EFFORT] [-s SESSION] [-f] [-r] [-h]"
   echo "  Container args:"
-  echo "    -a       The application directory to bind to /app (default: current dir)"
-  echo "    -b       The build directory to bind to /build"
+  echo "    -a       The application directory (default: current dir)"
+  echo "             Will be mounted at the same path inside the container"
+  echo "    -v       Additional volume to mount (can be specified multiple times)"
+  echo "             Path will be mounted at the same location inside the container"
   echo "    -r       Rebuild images"
   echo "    -t       The container engine to use (podman or charliecloud)"
   echo "  Claude Code args:"
@@ -40,10 +42,10 @@ usage() {
   exit 1
 }
 
-while getopts "a:b:t:ce:s:frh" opt; do
+while getopts "a:v:t:ce:s:frh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
-    b) BUILD_DIR=$OPTARG ;;
+    v) VOLUMES+=("$OPTARG") ;;
     t) CONTAINER_TYPE=$OPTARG ;;
     c) CONTINUE=true ;;
     e) EFFORT=$OPTARG ;;
@@ -68,9 +70,11 @@ fi
 
 # Ensure APP_DIR is absolute
 APP_DIR=$(realpath "$APP_DIR")
-if [[ -n "${BUILD_DIR}" ]]; then
-  BUILD_DIR=$(realpath "$BUILD_DIR")
-fi
+
+# Convert all volume paths to absolute paths
+for i in "${!VOLUMES[@]}"; do
+  VOLUMES[$i]=$(realpath "${VOLUMES[$i]}")
+done
 
 # Build claude-code arguments
 CLAUDE_CODE_ARGS=""
@@ -105,12 +109,13 @@ if [[ "${CONTAINER_TYPE}" == "podman" ]]; then
   fi
   popd > /dev/null
 
-  CMD="podman run -it --rm -v ${APP_DIR}:/app"
-  if [[ -n "${BUILD_DIR}" ]]; then
-    CMD="${CMD} -v ${BUILD_DIR}:/build"
-  fi
+  CMD="podman run -it --rm -v '${APP_DIR}':'${APP_DIR}' -w '${APP_DIR}'"
+  # Add additional volumes
+  for vol in "${VOLUMES[@]}"; do
+    CMD="${CMD} -v '${vol}':'${vol}'"
+  done
   CMD="${CMD} \
-    -v ${HOME}/.claude/:/root/.claude \
+    -v '${HOME}/.claude/':'/root/.claude/' \
     -e ANTHROPIC_BASE_URL='${ANTHROPIC_BASE_URL}' \
     -e ANTHROPIC_DEFAULT_SONNET_MODEL='${ANTHROPIC_DEFAULT_SONNET_MODEL}' \
     -e ANTHROPIC_AUTH_TOKEN='${ANTHROPIC_AUTH_TOKEN}' \
@@ -145,17 +150,17 @@ elif [[ "${CONTAINER_TYPE}" == "charliecloud" ]]; then
   fi
   popd > /dev/null
 
-  CMD="ch-run --write-fake --private-tmp -b ${APP_DIR}:/app"
-  if [[ -n "${BUILD_DIR}" ]]; then
-    CMD="${CMD} -b ${BUILD_DIR}:/build"
-  fi
+  CMD="ch-run --write-fake --private-tmp -b '${APP_DIR}':'${APP_DIR}' --cd '${APP_DIR}'"
+  # Add additional volumes
+  for vol in "${VOLUMES[@]}"; do
+    CMD="${CMD} -b '${vol}':'${vol}'"
+  done
   CMD="${CMD} \
     -b ${HOME}/.claude/:/root/.claude/ \
     --set-env ANTHROPIC_BASE_URL='${ANTHROPIC_BASE_URL}' \
     --set-env ANTHROPIC_DEFAULT_SONNET_MODEL='${ANTHROPIC_DEFAULT_SONNET_MODEL}' \
     --set-env ANTHROPIC_AUTH_TOKEN='${ANTHROPIC_AUTH_TOKEN}' \
     --set-env CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
-    --cd /app \
     ${CH_STORAGE}/claude-code -- /root/.local/bin/claude${CLAUDE_CODE_ARGS}"
   
   eval "${CMD}"

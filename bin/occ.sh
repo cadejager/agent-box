@@ -7,18 +7,20 @@ PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
 
 # Defaults
 APP_DIR=$(pwd)
-BUILD_DIR=""
 CONTAINER_TYPE=""
 REBUILD=false
 CONTINUE=false
 SESSION=""
 FORK=false
+VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a APP_DIR] [-b BUILD_DIR] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h]"
+  echo "Usage: ${0} [-a APP_DIR] [-v VOLUME] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h]"
   echo "  Container args:"
-  echo "    -a       The application directory to bind to /app (default: current dir)"
-  echo "    -b       The build directory to bind to /build"
+  echo "    -a       The application directory (default: current dir)"
+  echo "             Will be mounted at the same path inside the container"
+  echo "    -v       Additional volume to mount (can be specified multiple times)"
+  echo "             Path will be mounted at the same location inside the container"
   echo "    -r       Rebuild images"
   echo "    -t       The container engine to use (podman or charliecloud)"
   echo "  Opencode args:"
@@ -30,10 +32,10 @@ usage() {
   exit 1
 }
 
-while getopts "a:b:t:cs:frh" opt; do
+while getopts "a:v:t:cs:frh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
-    b) BUILD_DIR=$OPTARG ;;
+    v) VOLUMES+=("$OPTARG") ;;
     t) CONTAINER_TYPE=$OPTARG ;;
     c) CONTINUE=true ;;
     s) SESSION=$OPTARG ;;
@@ -57,9 +59,11 @@ fi
 
 # Ensure APP_DIR is absolute
 APP_DIR=$(realpath "$APP_DIR")
-if [[ -n "${BUILD_DIR}" ]]; then
-  BUILD_DIR=$(realpath "$BUILD_DIR")
-fi
+
+# Convert all volume paths to absolute paths
+for i in "${!VOLUMES[@]}"; do
+  VOLUMES[$i]=$(realpath "${VOLUMES[$i]}")
+done
 
 # Build opencode arguments
 OPENCODE_ARGS=""
@@ -91,10 +95,11 @@ if [[ "${CONTAINER_TYPE}" == "podman" ]]; then
   fi
   popd > /dev/null
 
-  CMD="podman run -it --rm -v ${APP_DIR}:/app"
-  if [[ -n "${BUILD_DIR}" ]]; then
-    CMD="${CMD} -v ${BUILD_DIR}:/build"
-  fi
+  CMD="podman run -it --rm -v '${APP_DIR}':'${APP_DIR}' -w '${APP_DIR}'"
+  # Add additional volumes
+  for vol in "${VOLUMES[@]}"; do
+    CMD="${CMD} -v '${vol}':'${vol}'"
+  done
   CMD="${CMD} \
     -v ${HOME}/.config/opencode/:/root/.config/opencode/ \
     -v ${HOME}/.local/share/opencode/:/root/.local/share/opencode/ \
@@ -130,16 +135,16 @@ elif [[ "${CONTAINER_TYPE}" == "charliecloud" ]]; then
   fi
   popd > /dev/null
 
-  CMD="ch-run --write-fake --private-tmp -b ${APP_DIR}:/app"
-  if [[ -n "${BUILD_DIR}" ]]; then
-    CMD="${CMD} -b ${BUILD_DIR}:/build"
-  fi
+  CMD="ch-run --write-fake --private-tmp -b '${APP_DIR}':'${APP_DIR}' --cd '${APP_DIR}'"
+  # Add additional volumes
+  for vol in "${VOLUMES[@]}"; do
+    CMD="${CMD} -b '${vol}':'${vol}'"
+  done
   CMD="${CMD} \
     -b ${HOME}/.config/opencode/:/root/.config/opencode/ \
     -b ${HOME}/.local/share/opencode/:/root/.local/share/opencode/ \
     --set-env=OPENCODE_ENABLE_EXA=1 \
     --set-env=OPENCODE_EXPERIMENTAL_LSP_TOOL=true \
-    --cd /app \
     ${CH_STORAGE}/opencode -- /usr/local/bin/opencode${OPENCODE_ARGS}"
   
   eval "${CMD}"

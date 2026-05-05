@@ -3,7 +3,4 @@ FROM agent-base
 # Install claude-code
 RUN npm install -g @anthropic-ai/claude-code
 
-# Pre-create directories needed for bind mounts
-RUN mkdir -p /root/.claude
-
 WORKDIR /app
