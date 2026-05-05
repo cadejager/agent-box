@@ -2,14 +2,6 @@
 #
 # Launches claude-code in a container (podman or charliecloud)
 
-export CLAUDE_CONFIG_DIR='~/.claude'
-unset ANTHROPIC_BASE_URL
-export ANTHROPIC_BASE_URL='https://aiportal-api.aws.lanl.gov'
-export ANTHROPIC_DEFAULT_SONNET_MODEL='anthropic.claude-sonnet-4-5-20250929-v1:0'
-export NODE_USE_SYSTEM_CA='1'
-export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS='1'
-export DISABLE_PROMPT_CACHING='1'
-
 # Get the dir of the project
 PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
 
