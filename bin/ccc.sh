@@ -115,7 +115,7 @@ if [[ "${CONTAINER_TYPE}" == "podman" ]]; then
     -e ANTHROPIC_DEFAULT_SONNET_MODEL='${ANTHROPIC_DEFAULT_SONNET_MODEL}' \
     -e ANTHROPIC_AUTH_TOKEN='${ANTHROPIC_AUTH_TOKEN}' \
     -e CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
-    claude-code /root/.local/bin/claude${CLAUDE_CODE_ARGS}"
+    claude-code /usr/local/bin/claude${CLAUDE_CODE_ARGS}"
   
   eval "${CMD}"
 
