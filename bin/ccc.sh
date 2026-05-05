@@ -161,7 +161,7 @@ elif [[ "${CONTAINER_TYPE}" == "charliecloud" ]]; then
     --set-env=ANTHROPIC_DEFAULT_SONNET_MODEL='${ANTHROPIC_DEFAULT_SONNET_MODEL}' \
     --set-env=ANTHROPIC_AUTH_TOKEN='${ANTHROPIC_AUTH_TOKEN}' \
     --set-env=CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
-    ${CH_STORAGE}/claude-code -- /root/.local/bin/claude${CLAUDE_CODE_ARGS}"
+    ${CH_STORAGE}/claude-code -- /usr/local/bin/claude${CLAUDE_CODE_ARGS}"
   
   eval "${CMD}"
 
