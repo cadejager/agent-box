@@ -1,7 +1,0 @@
-model = "gpt-oss-64k:20b"
-model_provider = "ollama-container"
-
-[model_providers.ollama-container]
-name = "Self-Hosted Ollama"
-base_url = "http://host.containers.internal:11434/v1"
-wire_api = "responses"
