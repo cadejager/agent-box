@@ -108,6 +108,7 @@ if [[ "${CONTAINER_TYPE}" == "podman" ]]; then
   done
   CMD="${CMD} \
     -v '${HOME}/.claude/':'/root/.claude/' \
+    -v '${HOME}/.claude.json':'/root/.claude.json' \
     -e ANTHROPIC_BASE_URL='${ANTHROPIC_BASE_URL}' \
     -e ANTHROPIC_DEFAULT_SONNET_MODEL='${ANTHROPIC_DEFAULT_SONNET_MODEL}' \
     -e ANTHROPIC_AUTH_TOKEN='${ANTHROPIC_AUTH_TOKEN}' \
@@ -149,6 +150,7 @@ elif [[ "${CONTAINER_TYPE}" == "charliecloud" ]]; then
   done
   CMD="${CMD} \
     -b ${HOME}/.claude/:/root/.claude/ \
+    -b ${HOME}/.claude.json:/root/.claude.json \
     --set-env=ANTHROPIC_BASE_URL='${ANTHROPIC_BASE_URL}' \
     --set-env=ANTHROPIC_DEFAULT_SONNET_MODEL='${ANTHROPIC_DEFAULT_SONNET_MODEL}' \
     --set-env=ANTHROPIC_AUTH_TOKEN='${ANTHROPIC_AUTH_TOKEN}' \
