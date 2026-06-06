@@ -6,10 +6,3 @@ agents/certs/
 
 # Charliecloud image store (built by bin/ccc.sh / bin/occ.sh)
 agents/.charliecloud/
-
-# Ollama model data
-ollama/ollama/
-
-# LocalAI models and backends
-localai/models/
-localai/backends/

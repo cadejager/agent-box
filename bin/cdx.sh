@@ -26,7 +26,7 @@ usage() {
   echo "    -f       Fork instead of resume (with -c/-r, or alone for the picker)"
   echo "  Pass-through after -- (common codex flags):"
   echo "    -m MODEL    -c model_reasoning_effort=high   (codex's own -c = config)"
-  echo "    --oss --local-provider ollama    --sandbox workspace-write"
+  echo "    --oss --local-provider lmstudio  --sandbox workspace-write"
   echo "    --search    --ask-for-approval on-request"
   echo "    -h       Show this help"
   exit 1
