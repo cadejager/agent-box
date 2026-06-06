@@ -4,43 +4,39 @@
 
 set -eo pipefail
 
+# shellcheck source=lib/agent-run.sh
+source "$( dirname -- "${BASH_SOURCE[0]}" )/lib/agent-run.sh"
+
 # Defaults
 APP_DIR=$(pwd)
 CONTAINER_TYPE=""
 REBUILD=false
 CONTINUE=false
-EFFORT=""
 SESSION=""
 FORK=false
 VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a APP_DIR] [-v VOLUME] [-t TYPE] [-c]  [-e EFFORT] [-s SESSION] [-f] [-r] [-h] [-- ARGS...]"
-  echo "  Container args:"
-  echo "    -a       The application directory (default: current dir)"
-  echo "             Will be mounted at the same path inside the container"
-  echo "    -v       Additional volume to mount (can be specified multiple times)"
-  echo "             Path will be mounted at the same location inside the container"
-  echo "    -r       Rebuild images"
-  echo "    -t       The container engine to use (podman or charliecloud)"
-  echo "  Claude Code args:"
-  echo "    -c       Continue the last session"
-  echo "    -e       Effort level for the current session (low, medium, high, xhigh, max)"
-  echo "    -s       Resume a conversation by session ID, or open interactive picker with optional search term"
-  echo "    -f       When resuming, create a new session ID instead of reusing the original (use with -s or -c)"
-  echo "    --       Pass all following arguments straight through to claude"
-  echo ""
-  echo "  -h       Display this message"
+  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h] [-- ARGS...]"
+  agent::usage_container
+  echo "  Claude Code session:"
+  echo "    -c       Continue the most recent session"
+  echo "    -s ID    Resume session ID (omit ID for the interactive picker)"
+  echo "    -f       Fork instead of resume (use with -s or -c)"
+  echo "  Pass-through after -- (common claude flags):"
+  echo "    --model sonnet|opus|<name>    --effort low|medium|high|xhigh|max"
+  echo "    -p (print/non-interactive)    --permission-mode plan|acceptEdits|..."
+  echo "    --add-dir DIR    --agent NAME"
+  echo "    -h       Show this help"
   exit 1
 }
 
-while getopts "a:v:t:ce:s:frh" opt; do
+while getopts "a:v:t:cs:frh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
     t) CONTAINER_TYPE=$OPTARG ;;
     c) CONTINUE=true ;;
-    e) EFFORT=$OPTARG ;;
     s) SESSION=$OPTARG ;;
     f) FORK=true ;;
     r) REBUILD=true ;;
@@ -63,9 +59,6 @@ fi
 if [[ "${FORK}" == "true" ]]; then
   AGENT_ARGS+=(--fork-session)
 fi
-if [[ -n "${EFFORT}" ]]; then
-  AGENT_ARGS+=(--effort "${EFFORT}")
-fi
 
 # Agent-specific container configuration
 IMAGE="claude-code"
@@ -80,6 +73,4 @@ CONFIG_MOUNTS=(
 ENV_FORWARD=(ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_AUTH_TOKEN)
 ENV_LITERAL=(CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1)
 
-# shellcheck source=lib/agent-run.sh
-source "$( dirname -- "${BASH_SOURCE[0]}" )/lib/agent-run.sh"
 agent::launch

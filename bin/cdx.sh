@@ -4,6 +4,9 @@
 
 set -eo pipefail
 
+# shellcheck source=lib/agent-run.sh
+source "$( dirname -- "${BASH_SOURCE[0]}" )/lib/agent-run.sh"
+
 # Defaults
 APP_DIR=$(pwd)
 CONTAINER_TYPE=""
@@ -14,22 +17,17 @@ FORK=false
 VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a APP_DIR] [-v VOLUME] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h] [-- ARGS...]"
-  echo "  Container args:"
-  echo "    -a       The application directory (default: current dir)"
-  echo "             Will be mounted at the same path inside the container"
-  echo "    -v       Additional volume to mount (can be specified multiple times)"
-  echo "             Path will be mounted at the same location inside the container"
-  echo "    -r       Rebuild images"
-  echo "    -t       The container engine to use (podman or charliecloud)"
-  echo "  Codex args:"
-  echo "    -c       Resume (reattach) your most recent session"
-  echo "    -s       Resume a specific session by ID"
-  echo "    -f       Fork instead of resume (with -s, or the latest session)"
-  echo "    --       Pass all following arguments straight through to codex"
-  echo "             (e.g. -- -m MODEL, or -- -c model_reasoning_effort=high)"
-  echo ""
-  echo "  -h       Display this message"
+  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h] [-- ARGS...]"
+  agent::usage_container
+  echo "  Codex session (mapped to resume/fork subcommands):"
+  echo "    -c       Resume the most recent session"
+  echo "    -s ID    Resume session ID"
+  echo "    -f       Fork instead of resume (use with -s, or alone for the latest)"
+  echo "  Pass-through after -- (common codex flags):"
+  echo "    -m MODEL    -c model_reasoning_effort=high   (codex's own -c = config)"
+  echo "    --oss --local-provider ollama    --sandbox workspace-write"
+  echo "    --search    --ask-for-approval on-request"
+  echo "    -h       Show this help"
   exit 1
 }
 
@@ -89,6 +87,4 @@ CONFIG_MOUNTS=(
 ENV_FORWARD=(OPENAI_API_KEY CODEX_API_KEY)
 ENV_LITERAL=()
 
-# shellcheck source=lib/agent-run.sh
-source "$( dirname -- "${BASH_SOURCE[0]}" )/lib/agent-run.sh"
 agent::launch

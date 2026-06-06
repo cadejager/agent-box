@@ -4,6 +4,9 @@
 
 set -eo pipefail
 
+# shellcheck source=lib/agent-run.sh
+source "$( dirname -- "${BASH_SOURCE[0]}" )/lib/agent-run.sh"
+
 # Defaults
 APP_DIR=$(pwd)
 CONTAINER_TYPE=""
@@ -14,21 +17,16 @@ FORK=false
 VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a APP_DIR] [-v VOLUME] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h] [-- ARGS...]"
-  echo "  Container args:"
-  echo "    -a       The application directory (default: current dir)"
-  echo "             Will be mounted at the same path inside the container"
-  echo "    -v       Additional volume to mount (can be specified multiple times)"
-  echo "             Path will be mounted at the same location inside the container"
-  echo "    -r       Rebuild images"
-  echo "    -t       The container engine to use (podman or charliecloud)"
-  echo "  Opencode args:"
+  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h] [-- ARGS...]"
+  agent::usage_container
+  echo "  Opencode session:"
   echo "    -c       Continue the last session"
-  echo "    -s       Continue a specific session by ID"
-  echo "    -f       Fork the session (use with -c or -s)"
-  echo "    --       Pass all following arguments straight through to opencode"
-  echo ""
-  echo "  -h       Display this message"
+  echo "    -s ID    Continue session ID"
+  echo "    -f       Fork the session (use with -s or -c)"
+  echo "  Pass-through after -- (common opencode flags):"
+  echo "    -m provider/model    --agent NAME    --pure"
+  echo "    headless: run \"MESSAGE\" [--format json] [--variant high|max|minimal]"
+  echo "    -h       Show this help"
   exit 1
 }
 
@@ -72,6 +70,4 @@ CONFIG_MOUNTS=(
 ENV_FORWARD=()
 ENV_LITERAL=(OPENCODE_ENABLE_EXA=1 OPENCODE_EXPERIMENTAL_LSP_TOOL=true)
 
-# shellcheck source=lib/agent-run.sh
-source "$( dirname -- "${BASH_SOURCE[0]}" )/lib/agent-run.sh"
 agent::launch

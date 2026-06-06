@@ -28,6 +28,16 @@
 # Repo root, derived from this file's location (bin/lib/agent-run.sh).
 PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/../.." &> /dev/null && pwd )
 
+# Shared "Container args" section for the launchers' -h output. Each wrapper
+# calls this, then prints its own tool-specific session + pass-through lines.
+agent::usage_container() {
+  echo "  Container args:"
+  echo "    -a DIR   App directory, mounted at the same path inside (default: cwd)"
+  echo "    -v VOL   Extra volume, mounted at the same path inside (repeatable)"
+  echo "    -t TYPE  Engine: podman or charliecloud (default: auto-detect)"
+  echo "    -r       Rebuild images"
+}
+
 # Pick an engine if the wrapper did not force one with -t. Prefers Charliecloud.
 agent::detect_engine() {
   if [[ -n "${CONTAINER_TYPE}" ]]; then
