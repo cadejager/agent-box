@@ -52,12 +52,17 @@ agent::normalize_paths() {
   done
 }
 
-# Copy the host CA bundle into agents/certs/ for the image build. Run from the
-# agents/ directory; missing certs are skipped.
+# Copy the host CA bundle into agents/certs/ for the image build. These are
+# baked into agent-base (which every agent image inherits) so containers can get
+# through TLS-intercepting corporate proxies. Run from the agents/ directory.
+# Source defaults to ~/.local/share/certs, overridable via AGENT_CERTS_DIR; a
+# missing/empty source is fine (an empty certs/ dir still satisfies the COPY,
+# and update-ca-certificates just adds nothing).
 agent::refresh_certs() {
+  local src="${AGENT_CERTS_DIR:-${HOME}/.local/share/certs}"
   rm -rf certs
   mkdir certs
-  cp "${HOME}"/.local/share/certs/* certs/ 2>/dev/null || true
+  cp "${src}"/* certs/ 2>/dev/null || true
 }
 
 # Lazily build agent-base then the agent image with podman.
@@ -68,10 +73,10 @@ agent::build_podman() {
   fi
   pushd "${PROJ_DIR}/agents" > /dev/null || exit
   if ! podman image exists agent-base; then
+    agent::refresh_certs
     podman build -t agent-base -f Containerfile.base .
   fi
   if ! podman image exists "${IMAGE}"; then
-    agent::refresh_certs
     podman build -t "${IMAGE}" -f "${CONTAINERFILE}" .
   fi
   popd > /dev/null || exit
@@ -89,11 +94,11 @@ agent::build_charliecloud() {
   fi
   pushd "${PROJ_DIR}/agents" > /dev/null || exit
   if [[ ! -d "${CH_STORAGE}/agent-base" ]]; then
+    agent::refresh_certs
     ch-image build -t agent-base -f Containerfile.base .
     ch-convert -i ch-image -o dir agent-base "${CH_STORAGE}/agent-base"
   fi
   if [[ ! -d "${CH_STORAGE}/${IMAGE}" ]]; then
-    agent::refresh_certs
     ch-image build -t "${IMAGE}" -f "${CONTAINERFILE}" .
     ch-convert -i ch-image -o dir "${IMAGE}" "${CH_STORAGE}/${IMAGE}"
   fi
