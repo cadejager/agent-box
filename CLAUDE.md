@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Bash launchers + Containerfiles for running AI coding agents (Claude Code, Claude Desktop, opencode, codex) inside rootless containers. There is no application code, build system, or test suite — the "source" is shell scripts and container definitions.
+Bash launchers + Containerfiles for running AI coding agents (Claude Code, opencode, codex) inside rootless containers. There is no application code, build system, or test suite — the "source" is shell scripts and container definitions.
 
 ## Common commands
 
@@ -14,7 +14,6 @@ Agent launchers (`bin/`, runnable from anywhere; default mount target = current 
 ./bin/ccc.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r [ID]] [-f] [-b]
 ./bin/occ.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r [ID]] [-f] [-b]   # opencode
 ./bin/cdx.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r [ID]] [-f] [-b]   # codex (OpenAI Codex CLI)
-./bin/cdt.sh [-a APP_DIR] [-v VOL] [-g] [-b]                                           # Claude Desktop GUI (podman only)
 ```
 
 - `-b` forces an image rebuild; `-t` overrides engine auto-detection; `-h` prints full usage.
@@ -24,7 +23,7 @@ There is no separate build/lint/test step — agent images build lazily on first
 
 ## Architecture
 
-**Two-stage image hierarchy.** `agents/Containerfile.base` builds `agent-base` (node:trixie + ansible/git/python/C toolchain/rust + host CA certs). Each agent image (`Containerfile.claude-code`, `.claude-desktop`, `.opencode`, `.codex`) is `FROM agent-base` and only installs its own tool. Editing the base affects all of them.
+**Two-stage image hierarchy.** `agents/Containerfile.base` builds `agent-base` (node:trixie + ansible/git/python/C toolchain/rust + host CA certs). Each agent image (`Containerfile.claude-code`, `.opencode`, `.codex`) is `FROM agent-base` and only installs its own tool. Editing the base affects all of them.
 
 **Launcher pattern — `bin/lib/agent-run.sh` + thin wrappers.** `ccc.sh`, `occ.sh`, and `cdx.sh` source the shared lib, declare only what differs (image, Containerfile, config mounts, env vars, agent binary, flag→arg mapping), then call `agent::launch`. The lib:
 1. Auto-detects the engine — prefers Charliecloud (`ch-run`) if present, else podman; `-t` overrides.
@@ -32,12 +31,10 @@ There is no separate build/lint/test step — agent images build lazily on first
 3. Mounts the target dir **at the same absolute path inside the container**, so file paths in agent output stay valid on the host; extra `-v` volumes follow the same host==container rule.
 4. Bind-mounts host agent config/state so the container itself stays ephemeral (`--rm`): ccc → `~/.claude/` + `~/.claude.json`; occ → `~/.config/opencode/` + `~/.local/share/opencode/`.
 
-Adding an agent means a new wrapper + Containerfile; changing engine/build/run behavior means editing `bin/lib/agent-run.sh` once. (`cdt.sh` predates the lib and is still standalone.)
+Adding an agent means a new wrapper + Containerfile; changing engine/build/run behavior means editing `bin/lib/agent-run.sh` once.
 
 **Charliecloud vs podman.** Podman runs the tool images directly. Charliecloud builds the same Containerfiles via `ch-image`, converts them to dir format under `agents/.charliecloud/`, and runs them unprivileged with `ch-run --write-fake --private-tmp`. Both paths produce the same mount layout.
 
 **Custom CA certs.** Before building, launchers copy `~/.local/share/certs/*` into `agents/certs/` (gitignored); the base image `COPY`s them in and runs `update-ca-certificates` — needed behind TLS-intercepting proxies. Missing certs are silently skipped.
 
 **Pointing agents at local models.** `ccc.sh` forwards `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_DEFAULT_SONNET_MODEL` from the host env, but only when set and non-empty (so unset/empty vars don't shadow the mounted `~/.claude.json`) — set these to aim Claude Code at a local OpenAI/Anthropic-compatible server (e.g. LM Studio) or any proxy, instead of the default API. `occ.sh` instead sets `OPENCODE_ENABLE_EXA` and `OPENCODE_EXPERIMENTAL_LSP_TOOL`. `cdx.sh` forwards `OPENAI_API_KEY`/`CODEX_API_KEY` when set and mounts `~/.codex/`; codex ignores `OPENAI_BASE_URL`, so aiming it at a local server must be done in `~/.codex/config.toml`, not env. Auth/sessions persist to the writable `~/.codex/` mount (like `~/.claude/`); if a `codex login` doesn't stick, set `cli_auth_credentials_store = "file"` there.
-
-**Claude Desktop GUI (cdt.sh, podman only).** Displays via native Wayland by bind-mounting the host Wayland socket (plus D-Bus when present). The container is the security boundary, so inner sandboxes are disabled: Electron runs `--no-sandbox` and Cowork is pinned to `COWORK_VM_BACKEND=host`. Default passes `/dev/dri` for GPU rendering; `-g` switches to software rendering. Known trade-off (documented in-file): the global hotkey doesn't work under native Wayland.
