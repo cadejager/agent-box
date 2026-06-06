@@ -12,32 +12,42 @@ APP_DIR=$(pwd)
 CONTAINER_TYPE=""
 REBUILD=false
 CONTINUE=false
+RESUME=false
 SESSION=""
 FORK=false
 VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r ID] [-f] [-b] [-h] [-- ARGS...]"
+  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r [ID]] [-f] [-b] [-h] [-- ARGS...]"
   agent::usage_container
   echo "  Codex session (mapped to resume/fork subcommands):"
-  echo "    -c       Resume the most recent session"
-  echo "    -r ID    Resume session ID"
-  echo "    -f       Fork instead of resume (use with -r, or alone for the latest)"
+  echo "    -c       Resume the most recent session (resume --last)"
+  echo "    -r [ID]  Resume session ID, or open the picker if no ID"
+  echo "    -f       Fork instead of resume (with -c/-r, or alone for the picker)"
   echo "  Pass-through after -- (common codex flags):"
   echo "    -m MODEL    -c model_reasoning_effort=high   (codex's own -c = config)"
-  echo "    --oss --local-provider ollama    --sandbox workspace-write"
+  echo "    --oss --local-provider lmstudio  --sandbox workspace-write"
   echo "    --search    --ask-for-approval on-request"
   echo "    -h       Show this help"
   exit 1
 }
 
-while getopts "a:v:t:cr:fbh" opt; do
+while getopts "a:v:t:crfbh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
     t) CONTAINER_TYPE=$OPTARG ;;
     c) CONTINUE=true ;;
-    r) SESSION=$OPTARG ;;
+    r) RESUME=true
+       # -r takes an OPTIONAL id (getopts can't, so do it by hand): grab the
+       # next token only if it isn't another option, so bare `-r` opens codex's
+       # interactive picker.
+       next="${!OPTIND:-}"
+       if [[ -n "${next}" && "${next}" != -* ]]; then
+         SESSION="${next}"
+         OPTIND=$((OPTIND + 1))
+       fi
+       ;;
     f) FORK=true ;;
     b) REBUILD=true ;;
     h|?) usage ;;
@@ -48,30 +58,21 @@ done
 shift $((OPTIND - 1))
 EXTRA_ARGS=("$@")
 
-# Build codex arguments. Unlike claude/opencode, codex uses SUBCOMMANDS
-# (resume / fork), not flags, and the session id is positional -- so the
-# subcommand tokens must be the FIRST elements of AGENT_ARGS.
-#   -c        -> resume --last   (reattach the most recent session)
-#   -r ID     -> resume ID
-#   -f        -> fork --last
-#   -f -r ID  -> fork ID
-# fork and resume are mutually exclusive subcommands; with no flag codex starts
-# a fresh session.
+# Build codex arguments. codex uses SUBCOMMANDS (resume / fork), not flags, and
+# the session id is positional, so the subcommand tokens come first. The session
+# "target" is shared by resume and fork:
+#   -r ID -> ID    |    -c -> --last (most recent)    |    -r (bare) -> picker
 AGENT_ARGS=()
+target=()
+if [[ -n "${SESSION}" ]]; then
+  target=("${SESSION}")
+elif [[ "${CONTINUE}" == "true" ]]; then
+  target=(--last)
+fi
 if [[ "${FORK}" == "true" ]]; then
-  AGENT_ARGS+=(fork)
-  if [[ -n "${SESSION}" ]]; then
-    AGENT_ARGS+=("${SESSION}")
-  else
-    AGENT_ARGS+=(--last)
-  fi
-elif [[ "${CONTINUE}" == "true" || -n "${SESSION}" ]]; then
-  AGENT_ARGS+=(resume)
-  if [[ -n "${SESSION}" ]]; then
-    AGENT_ARGS+=("${SESSION}")
-  else
-    AGENT_ARGS+=(--last)
-  fi
+  AGENT_ARGS=(fork "${target[@]}")
+elif [[ "${CONTINUE}" == "true" || "${RESUME}" == "true" ]]; then
+  AGENT_ARGS=(resume "${target[@]}")
 fi
 
 # Agent-specific container configuration
