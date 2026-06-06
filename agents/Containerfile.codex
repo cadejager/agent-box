@@ -1,0 +1,10 @@
+FROM agent-base
+
+# Install codex (OpenAI Codex CLI). The npm package is a thin JS wrapper that
+# execs a precompiled, musl-static Rust binary pulled in as a per-arch
+# optionalDependency (e.g. @openai/codex-linux-arm64 / -linux-x64); npm resolves
+# the right one for the build architecture. The global prefix in node:trixie is
+# /usr/local, so the `codex` symlink lands at /usr/local/bin/codex.
+RUN npm install -g @openai/codex
+
+WORKDIR /app

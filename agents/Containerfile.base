@@ -1,7 +1,12 @@
 FROM node:trixie
 
-# Install Software
-RUN apt-get update; apt-get install -y ansible curl git python3 pip gcc g++ gdb valgrind cmake rust-all
+# Install software (single layer; fail fast on update errors, skip recommended
+# packages, and drop the apt lists afterward to keep the image smaller). This
+# toolchain is inherited by every agent image built FROM agent-base.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ansible curl git python3 pip gcc g++ gdb valgrind cmake rust-all \
+ && rm -rf /var/lib/apt/lists/*
 
 # certs
 COPY certs/ /usr/local/share/ca-certificates/

@@ -1,0 +1,5 @@
+# Resolve `source`d files relative to the sourcing script and follow them, so
+# the bin/ launchers (ccc.sh, occ.sh) can share bin/lib/agent-run.sh and still
+# lint cleanly with a plain `shellcheck bin/*.sh`.
+source-path=SCRIPTDIR
+external-sources=true
