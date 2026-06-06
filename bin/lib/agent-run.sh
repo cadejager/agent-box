@@ -19,7 +19,7 @@
 #   AGENT_ARGS     array of args appended to AGENT_BIN (may be empty)
 #   EXTRA_ARGS     array of pass-through args (after `--`), appended last (may be empty)
 #   CONFIG_MOUNTS  array of "hostpath:containerpath" mounts for agent config
-#   ENV_FORWARD    array of host env var names to forward when set (may be empty)
+#   ENV_FORWARD    array of host env var names to forward when set and non-empty (may be empty)
 #   ENV_LITERAL    array of "VAR=VALUE" always set in the container (may be empty)
 #
 # Those wrapper-provided globals are referenced here without local assignment:
@@ -61,7 +61,7 @@ agent::normalize_paths() {
 agent::refresh_certs() {
   local src="${AGENT_CERTS_DIR:-${HOME}/.local/share/certs}"
   rm -rf certs
-  mkdir certs
+  mkdir -p certs
   cp "${src}"/* certs/ 2>/dev/null || true
 }
 
@@ -138,13 +138,15 @@ agent::run_charliecloud() {
   for mount in "${CONFIG_MOUNTS[@]}"; do
     args+=(-b "${mount}")
   done
+  # --env-no-expand makes ch-run pass the value verbatim; without it ch-run does
+  # search-path/$-expansion on values that podman's -e leaves untouched.
   for var in "${ENV_FORWARD[@]}"; do
     if [[ -n "${!var:-}" ]]; then
-      args+=("--set-env=${var}=${!var}")
+      args+=(--env-no-expand "--set-env=${var}=${!var}")
     fi
   done
   for kv in "${ENV_LITERAL[@]}"; do
-    args+=("--set-env=${kv}")
+    args+=(--env-no-expand "--set-env=${kv}")
   done
   args+=("${CH_STORAGE}/${IMAGE}" -- "${AGENT_BIN}" "${AGENT_ARGS[@]}" "${EXTRA_ARGS[@]}")
   ch-run "${args[@]}"

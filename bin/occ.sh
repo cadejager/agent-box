@@ -45,7 +45,7 @@ while getopts "a:v:t:cs:frh" opt; do
   esac
 done
 
-# Pass-through: anything after `--` (or any bare args) goes to the agent.
+# Pass-through: everything after `--` is forwarded to the agent verbatim.
 shift $((OPTIND - 1))
 EXTRA_ARGS=("$@")
 
