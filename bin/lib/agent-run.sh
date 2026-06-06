@@ -14,6 +14,7 @@
 #   VOLUMES        array of extra host paths to bind at the same path
 #   CONTAINER_TYPE "podman" | "charliecloud" | "" to auto-detect
 #   REBUILD        "true" to rebuild images first
+#   HOST_PORTS     array of host loopback ports to forward into the container (may be empty)
 #   IMAGE          image/tag name (e.g. claude-code)
 #   CONTAINERFILE  Containerfile under agents/ (e.g. Containerfile.claude-code)
 #   AGENT_BIN      in-container binary to run (e.g. /usr/local/bin/claude)
@@ -37,6 +38,8 @@ agent::usage_container() {
   echo "    -v VOL   Extra volume, mounted at the same path inside (repeatable)"
   echo "    -t TYPE  Engine: podman or charliecloud (default: auto-detect)"
   echo "    -b       Rebuild images"
+  echo "    -p PORT  Forward host 127.0.0.1:PORT into the container (repeatable;"
+  echo "             reach host services like LM Studio; podman only)"
 }
 
 # Pick an engine if the wrapper did not force one with -t. Prefers Charliecloud.
@@ -138,6 +141,17 @@ agent::build_charliecloud() {
 # and exec it. Built as an array -- no eval, no quoting games.
 agent::run_podman() {
   local args=(run -it --rm -v "${APP_DIR}:${APP_DIR}" -w "${APP_DIR}")
+  # Per-port host access (-p): forward each host 127.0.0.1:PORT into the container
+  # via pasta's -T, so the agent can reach host services (e.g. LM Studio) -- scoped
+  # to exactly these ports, nothing else shared. Reach them at 127.0.0.1:PORT
+  # inside (localhost resolves to ::1 first, which pasta does not forward).
+  if [[ ${#HOST_PORTS[@]} -gt 0 ]]; then
+    local spec="" p
+    for p in "${HOST_PORTS[@]}"; do
+      spec+=",-T,${p}"
+    done
+    args+=(--network="pasta:${spec#,}")
+  fi
   local mount var kv
   for mount in "${VOLUMES[@]}"; do
     args+=(-v "${mount}:${mount}")
@@ -157,7 +171,9 @@ agent::run_podman() {
   podman "${args[@]}"
 }
 
-# Build the Charliecloud ch-run argv and exec it.
+# Build the Charliecloud ch-run argv and exec it. (HOST_PORTS / -p needs no
+# handling here: ch-run already shares the host network namespace, so the
+# container reaches host services directly.)
 agent::run_charliecloud() {
   local args=(--write-fake --private-tmp -b "${APP_DIR}:${APP_DIR}" --cd "${APP_DIR}")
   local mount var kv

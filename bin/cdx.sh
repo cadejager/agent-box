@@ -16,9 +16,10 @@ RESUME=false
 SESSION=""
 FORK=false
 VOLUMES=()
+HOST_PORTS=()
 
 usage() {
-  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r [ID]] [-f] [-b] [-h] [-- ARGS...]"
+  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r [ID]] [-f] [-b] [-p PORT] [-h] [-- ARGS...]"
   agent::usage_container
   echo "  Codex session (mapped to resume/fork subcommands):"
   echo "    -c       Resume the most recent session (resume --last)"
@@ -32,10 +33,11 @@ usage() {
   exit 1
 }
 
-while getopts "a:v:t:crfbh" opt; do
+while getopts "a:v:t:p:crfbh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
+    p) HOST_PORTS+=("$OPTARG") ;;
     t) CONTAINER_TYPE=$OPTARG ;;
     c) CONTINUE=true ;;
     r) RESUME=true ;;

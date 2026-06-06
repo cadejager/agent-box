@@ -43,6 +43,7 @@ All three launchers take the same flags:
 | `-r [ID]` | Resume session `ID`; with no ID, open the agent's interactive session picker |
 | `-f` | Fork instead of resume |
 | `-b` | Rebuild the images |
+| `-p PORT` | Forward host `127.0.0.1:PORT` into the container so it can reach a host service (e.g. LM Studio); repeatable, podman only |
 | `-h` | Show help (incl. a per-tool pass-through cheat-sheet) |
 | `-- ARGS…` | Everything after `--` is passed straight through to the underlying agent |
 
@@ -70,6 +71,8 @@ Serve the model yourself (e.g. LM Studio), then:
 
 - **Claude Code** — export `ANTHROPIC_BASE_URL` (and optionally `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_DEFAULT_SONNET_MODEL`); they're forwarded into the container when set.
 - **Codex** — set the endpoint in `~/.codex/config.toml` (codex ignores `OPENAI_BASE_URL`), or use `./bin/cdx.sh -- --oss --local-provider lmstudio`.
+
+> **Reaching a server on the host.** Under podman the container has its own network namespace, so the host's `localhost` is unreachable by default. Pass **`-p PORT`** (repeatable) to forward that host port in — e.g. `./bin/ccc.sh -p 1234` for LM Studio — then point the agent at **`http://127.0.0.1:PORT`**. Use `127.0.0.1`, *not* `localhost`: in the container `localhost` resolves to IPv6 `::1` first, which isn't forwarded (`curl -4 localhost` also works). Only the ports you list are exposed. Charliecloud already shares the host network, so `-p` isn't needed there.
 
 ## Corporate CA certs
 
