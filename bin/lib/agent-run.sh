@@ -35,7 +35,7 @@ agent::usage_container() {
   echo "    -a DIR   App directory, mounted at the same path inside (default: cwd)"
   echo "    -v VOL   Extra volume, mounted at the same path inside (repeatable)"
   echo "    -t TYPE  Engine: podman or charliecloud (default: auto-detect)"
-  echo "    -r       Rebuild images"
+  echo "    -b       Rebuild images"
 }
 
 # Pick an engine if the wrapper did not force one with -t. Prefers Charliecloud.

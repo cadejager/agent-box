@@ -11,14 +11,14 @@ Bash launchers + Containerfiles + Compose files for running AI coding agents (Cl
 Agent launchers (`bin/`, runnable from anywhere; default mount target = current dir):
 
 ```bash
-./bin/ccc.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-s SESSION] [-f] [-r]
-./bin/occ.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-s SESSION] [-f] [-r]   # opencode
-./bin/cdx.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-s SESSION] [-f] [-r]   # codex (OpenAI Codex CLI)
-./bin/cdt.sh [-a APP_DIR] [-v VOL] [-g] [-r]                                              # Claude Desktop GUI (podman only)
+./bin/ccc.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r ID] [-f] [-b]
+./bin/occ.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r ID] [-f] [-b]   # opencode
+./bin/cdx.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r ID] [-f] [-b]   # codex (OpenAI Codex CLI)
+./bin/cdt.sh [-a APP_DIR] [-v VOL] [-g] [-b]                                         # Claude Desktop GUI (podman only)
 ```
 
-- `-r` forces an image rebuild; `-t` overrides engine auto-detection; `-h` prints full usage.
-- All three launchers share the same flags `-c` / `-s` / `-f` (continue / resume-by-id / fork), mapped to each agent's native form (for codex these become the `resume`/`fork` subcommands). Everything after `--` is passed through to the agent — that's how you reach per-tool options like `--model`, claude's `--effort`, or codex's `-c model_reasoning_effort=…` (each launcher's `-h` lists the common ones).
+- `-b` forces an image rebuild; `-t` overrides engine auto-detection; `-h` prints full usage.
+- All three launchers share the same flags `-c` / `-r` / `-f` (continue / resume-by-id / fork), mapped to each agent's native form (for codex these become the `resume`/`fork` subcommands). Everything after `--` is passed through to the agent — that's how you reach per-tool options like `--model`, claude's `--effort`, or codex's `-c model_reasoning_effort=…` (each launcher's `-h` lists the common ones).
 
 Local model servers — `ollama.sh`/`localai.sh` are thin wrappers around `bin/service.sh`, which needs a Compose provider (`podman-compose` works; it also falls back to `podman compose`):
 

@@ -17,12 +17,12 @@ FORK=false
 VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h] [-- ARGS...]"
+  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r ID] [-f] [-b] [-h] [-- ARGS...]"
   agent::usage_container
   echo "  Codex session (mapped to resume/fork subcommands):"
   echo "    -c       Resume the most recent session"
-  echo "    -s ID    Resume session ID"
-  echo "    -f       Fork instead of resume (use with -s, or alone for the latest)"
+  echo "    -r ID    Resume session ID"
+  echo "    -f       Fork instead of resume (use with -r, or alone for the latest)"
   echo "  Pass-through after -- (common codex flags):"
   echo "    -m MODEL    -c model_reasoning_effort=high   (codex's own -c = config)"
   echo "    --oss --local-provider ollama    --sandbox workspace-write"
@@ -31,15 +31,15 @@ usage() {
   exit 1
 }
 
-while getopts "a:v:t:cs:frh" opt; do
+while getopts "a:v:t:cr:fbh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
     t) CONTAINER_TYPE=$OPTARG ;;
     c) CONTINUE=true ;;
-    s) SESSION=$OPTARG ;;
+    r) SESSION=$OPTARG ;;
     f) FORK=true ;;
-    r) REBUILD=true ;;
+    b) REBUILD=true ;;
     h|?) usage ;;
   esac
 done
@@ -52,9 +52,9 @@ EXTRA_ARGS=("$@")
 # (resume / fork), not flags, and the session id is positional -- so the
 # subcommand tokens must be the FIRST elements of AGENT_ARGS.
 #   -c        -> resume --last   (reattach the most recent session)
-#   -s ID     -> resume ID
+#   -r ID     -> resume ID
 #   -f        -> fork --last
-#   -f -s ID  -> fork ID
+#   -f -r ID  -> fork ID
 # fork and resume are mutually exclusive subcommands; with no flag codex starts
 # a fresh session.
 AGENT_ARGS=()

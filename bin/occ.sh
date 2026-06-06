@@ -17,12 +17,12 @@ FORK=false
 VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h] [-- ARGS...]"
+  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r ID] [-f] [-b] [-h] [-- ARGS...]"
   agent::usage_container
   echo "  Opencode session:"
   echo "    -c       Continue the last session"
-  echo "    -s ID    Continue session ID"
-  echo "    -f       Fork the session (use with -s or -c)"
+  echo "    -r ID    Continue session ID"
+  echo "    -f       Fork the session (use with -r or -c)"
   echo "  Pass-through after -- (common opencode flags):"
   echo "    -m provider/model    --agent NAME    --pure"
   echo "    headless: run \"MESSAGE\" [--format json] [--variant high|max|minimal]"
@@ -30,15 +30,15 @@ usage() {
   exit 1
 }
 
-while getopts "a:v:t:cs:frh" opt; do
+while getopts "a:v:t:cr:fbh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
     t) CONTAINER_TYPE=$OPTARG ;;
     c) CONTINUE=true ;;
-    s) SESSION=$OPTARG ;;
+    r) SESSION=$OPTARG ;;
     f) FORK=true ;;
-    r) REBUILD=true ;;
+    b) REBUILD=true ;;
     h|?) usage ;;
   esac
 done

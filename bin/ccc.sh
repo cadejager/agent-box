@@ -17,12 +17,12 @@ FORK=false
 VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h] [-- ARGS...]"
+  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r ID] [-f] [-b] [-h] [-- ARGS...]"
   agent::usage_container
   echo "  Claude Code session:"
   echo "    -c       Continue the most recent session"
-  echo "    -s ID    Resume session ID (omit ID for the interactive picker)"
-  echo "    -f       Fork instead of resume (use with -s or -c)"
+  echo "    -r ID    Resume session ID"
+  echo "    -f       Fork instead of resume (use with -r or -c)"
   echo "  Pass-through after -- (common claude flags):"
   echo "    --model sonnet|opus|<name>    --effort low|medium|high|xhigh|max"
   echo "    -p (print/non-interactive)    --permission-mode plan|acceptEdits|..."
@@ -31,15 +31,15 @@ usage() {
   exit 1
 }
 
-while getopts "a:v:t:cs:frh" opt; do
+while getopts "a:v:t:cr:fbh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
     t) CONTAINER_TYPE=$OPTARG ;;
     c) CONTINUE=true ;;
-    s) SESSION=$OPTARG ;;
+    r) SESSION=$OPTARG ;;
     f) FORK=true ;;
-    r) REBUILD=true ;;
+    b) REBUILD=true ;;
     h|?) usage ;;
   esac
 done

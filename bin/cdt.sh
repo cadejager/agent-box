@@ -26,13 +26,13 @@ NO_GPU=false
 VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a APP_DIR] [-v VOLUME] [-g] [-r] [-h]"
+  echo "Usage: ${0} [-a APP_DIR] [-v VOLUME] [-g] [-b] [-h]"
   echo "  Container args:"
   echo "    -a       The application directory (default: current dir)"
   echo "             Will be mounted at the same path inside the container"
   echo "    -v       Additional volume to mount (can be specified multiple times)"
   echo "             Path will be mounted at the same location inside the container"
-  echo "    -r       Rebuild images"
+  echo "    -b       Rebuild images"
   echo "  Claude Desktop args:"
   echo "    -g       Disable GPU acceleration (software rendering; CLAUDE_DISABLE_GPU=1)"
   echo ""
@@ -40,12 +40,12 @@ usage() {
   exit 1
 }
 
-while getopts "a:v:grh" opt; do
+while getopts "a:v:gbh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
     g) NO_GPU=true ;;
-    r) REBUILD=true ;;
+    b) REBUILD=true ;;
     h|?) usage ;;
   esac
 done
