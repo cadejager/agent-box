@@ -14,6 +14,8 @@
 # Native Wayland trade-off: the global hotkey (Ctrl+Alt+Space) does not work
 # in native Wayland mode (a Chromium GlobalShortcuts-portal limitation).
 
+set -eo pipefail
+
 # Get the dir of the project
 PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
 
@@ -71,7 +73,7 @@ APP_DIR=$(realpath "$APP_DIR")
 
 # Convert all volume paths to absolute paths
 for i in "${!VOLUMES[@]}"; do
-  VOLUMES[$i]=$(realpath "${VOLUMES[$i]}")
+  VOLUMES[i]=$(realpath "${VOLUMES[i]}")
 done
 
 # Persisted Claude Desktop config (login/OAuth token, MCP config, logs)
@@ -85,17 +87,17 @@ if [[ "true" == "${REBUILD}" ]]; then
   podman image rm claude-desktop 2>/dev/null || true
 fi
 
-pushd "${PROJ_DIR}/agents" > /dev/null
+pushd "${PROJ_DIR}/agents" > /dev/null || exit
 if ! podman image exists agent-base; then
   podman build -t agent-base -f Containerfile.base .
 fi
 if ! podman image exists claude-desktop; then
   rm -rf certs
   mkdir certs
-  cp ${HOME}/.local/share/certs/* certs/ 2>/dev/null || true
+  cp "${HOME}"/.local/share/certs/* certs/ 2>/dev/null || true
   podman build -t claude-desktop -f Containerfile.claude-desktop .
 fi
-popd > /dev/null
+popd > /dev/null || exit
 
 CMD="podman run --rm -v '${APP_DIR}':'${APP_DIR}' -w '${APP_DIR}'"
 # Add additional volumes

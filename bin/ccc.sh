@@ -2,6 +2,8 @@
 #
 # Launches claude-code in a container (podman or charliecloud)
 
+set -eo pipefail
+
 # Get the dir of the project
 PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
 
@@ -65,7 +67,7 @@ APP_DIR=$(realpath "$APP_DIR")
 
 # Convert all volume paths to absolute paths
 for i in "${!VOLUMES[@]}"; do
-  VOLUMES[$i]=$(realpath "${VOLUMES[$i]}")
+  VOLUMES[i]=$(realpath "${VOLUMES[i]}")
 done
 
 # Build claude-code arguments
@@ -83,36 +85,51 @@ if [[ -n "${EFFORT}" ]]; then
   CLAUDE_CODE_ARGS="${CLAUDE_CODE_ARGS} --effort ${EFFORT}"
 fi
 
+# Host env vars to forward into the container, but only when they are set, so we
+# don't inject empty values that could shadow config from the mounted
+# ~/.claude.json.
+ANTHROPIC_ENV=(ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_AUTH_TOKEN)
+
+# build_env_args PREFIX VAR... -> for each VAR that is set, echo PREFIXVAR='value'
+build_env_args() {
+  local prefix="$1"; shift
+  local out="" var
+  for var in "$@"; do
+    if [[ -n "${!var:-}" ]]; then
+      out="${out} ${prefix}${var}='${!var}'"
+    fi
+  done
+  printf '%s' "${out}"
+}
+
 if [[ "${CONTAINER_TYPE}" == "podman" ]]; then
   if [[ "true" == "${REBUILD}" ]]; then
     podman image rm agent-base 2>/dev/null || true
     podman image rm claude-code 2>/dev/null || true
   fi
 
-  pushd "${PROJ_DIR}/agents" > /dev/null
+  pushd "${PROJ_DIR}/agents" > /dev/null || exit
   if ! podman image exists agent-base; then
     podman build -t agent-base -f Containerfile.base .
   fi
   if ! podman image exists claude-code; then
     rm -rf certs
     mkdir certs
-    cp ${HOME}/.local/share/certs/* certs/ 2>/dev/null || true
+    cp "${HOME}"/.local/share/certs/* certs/ 2>/dev/null || true
     podman build -t claude-code -f Containerfile.claude-code .
   fi
-  popd > /dev/null
+  popd > /dev/null || exit
 
   CMD="podman run -it --rm -v '${APP_DIR}':'${APP_DIR}' -w '${APP_DIR}'"
   # Add additional volumes
   for vol in "${VOLUMES[@]}"; do
     CMD="${CMD} -v '${vol}':'${vol}'"
   done
+  ENV_ARGS="$(build_env_args '-e ' "${ANTHROPIC_ENV[@]}") -e CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1"
   CMD="${CMD} \
     -v '${HOME}/.claude/':'/root/.claude/' \
     -v '${HOME}/.claude.json':'/root/.claude.json' \
-    -e ANTHROPIC_BASE_URL='${ANTHROPIC_BASE_URL}' \
-    -e ANTHROPIC_DEFAULT_SONNET_MODEL='${ANTHROPIC_DEFAULT_SONNET_MODEL}' \
-    -e ANTHROPIC_AUTH_TOKEN='${ANTHROPIC_AUTH_TOKEN}' \
-    -e CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
+    ${ENV_ARGS} \
     claude-code /usr/local/bin/claude${CLAUDE_CODE_ARGS}"
   
   eval "${CMD}"
@@ -129,7 +146,7 @@ elif [[ "${CONTAINER_TYPE}" == "charliecloud" ]]; then
     ch-image delete claude-code 2>/dev/null || true
   fi
 
-  pushd "${PROJ_DIR}/agents" > /dev/null
+  pushd "${PROJ_DIR}/agents" > /dev/null || exit
   if [[ ! -d "${CH_STORAGE}/agent-base" ]]; then
     ch-image build -t agent-base -f Containerfile.base .
     ch-convert -i ch-image -o dir agent-base "${CH_STORAGE}/agent-base"
@@ -137,24 +154,22 @@ elif [[ "${CONTAINER_TYPE}" == "charliecloud" ]]; then
   if [[ ! -d "${CH_STORAGE}/claude-code" ]]; then
     rm -rf certs
     mkdir certs
-    cp ${HOME}/.local/share/certs/* certs/ 2>/dev/null || true
+    cp "${HOME}"/.local/share/certs/* certs/ 2>/dev/null || true
     ch-image build -t claude-code -f Containerfile.claude-code .
     ch-convert -i ch-image -o dir claude-code "${CH_STORAGE}/claude-code"
   fi
-  popd > /dev/null
+  popd > /dev/null || exit
 
   CMD="ch-run --write-fake --private-tmp -b '${APP_DIR}':'${APP_DIR}' --cd '${APP_DIR}'"
   # Add additional volumes
   for vol in "${VOLUMES[@]}"; do
     CMD="${CMD} -b '${vol}':'${vol}'"
   done
+  ENV_ARGS="$(build_env_args '--set-env=' "${ANTHROPIC_ENV[@]}") --set-env=CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1"
   CMD="${CMD} \
     -b ${HOME}/.claude/:/root/.claude/ \
     -b ${HOME}/.claude.json:/root/.claude.json \
-    --set-env=ANTHROPIC_BASE_URL='${ANTHROPIC_BASE_URL}' \
-    --set-env=ANTHROPIC_DEFAULT_SONNET_MODEL='${ANTHROPIC_DEFAULT_SONNET_MODEL}' \
-    --set-env=ANTHROPIC_AUTH_TOKEN='${ANTHROPIC_AUTH_TOKEN}' \
-    --set-env=CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
+    ${ENV_ARGS} \
     ${CH_STORAGE}/claude-code -- /usr/local/bin/claude${CLAUDE_CODE_ARGS}"
   
   eval "${CMD}"

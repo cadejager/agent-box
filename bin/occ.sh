@@ -2,6 +2,8 @@
 #
 # Launches opencode in a container (podman or charliecloud)
 
+set -eo pipefail
+
 # Get the dir of the project
 PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
 
@@ -62,7 +64,7 @@ APP_DIR=$(realpath "$APP_DIR")
 
 # Convert all volume paths to absolute paths
 for i in "${!VOLUMES[@]}"; do
-  VOLUMES[$i]=$(realpath "${VOLUMES[$i]}")
+  VOLUMES[i]=$(realpath "${VOLUMES[i]}")
 done
 
 # Build opencode arguments
@@ -83,17 +85,17 @@ if [[ "${CONTAINER_TYPE}" == "podman" ]]; then
     podman image rm opencode 2>/dev/null || true
   fi
 
-  pushd "${PROJ_DIR}/agents" > /dev/null
+  pushd "${PROJ_DIR}/agents" > /dev/null || exit
   if ! podman image exists agent-base; then
     podman build -t agent-base -f Containerfile.base .
   fi
   if ! podman image exists opencode; then
     rm -rf certs
     mkdir certs
-    cp ${HOME}/.local/share/certs/* certs/ 2>/dev/null || true
+    cp "${HOME}"/.local/share/certs/* certs/ 2>/dev/null || true
     podman build -t opencode -f Containerfile.opencode .
   fi
-  popd > /dev/null
+  popd > /dev/null || exit
 
   CMD="podman run -it --rm -v '${APP_DIR}':'${APP_DIR}' -w '${APP_DIR}'"
   # Add additional volumes
@@ -121,7 +123,7 @@ elif [[ "${CONTAINER_TYPE}" == "charliecloud" ]]; then
     ch-image delete opencode 2>/dev/null || true
   fi
 
-  pushd "${PROJ_DIR}/agents" > /dev/null
+  pushd "${PROJ_DIR}/agents" > /dev/null || exit
   if [[ ! -d "${CH_STORAGE}/agent-base" ]]; then
     ch-image build -t agent-base -f Containerfile.base .
     ch-convert -i ch-image -o dir agent-base "${CH_STORAGE}/agent-base"
@@ -129,11 +131,11 @@ elif [[ "${CONTAINER_TYPE}" == "charliecloud" ]]; then
   if [[ ! -d "${CH_STORAGE}/opencode" ]]; then
     rm -rf certs
     mkdir certs
-    cp ${HOME}/.local/share/certs/* certs/ 2>/dev/null || true
+    cp "${HOME}"/.local/share/certs/* certs/ 2>/dev/null || true
     ch-image build -t opencode -f Containerfile.opencode .
     ch-convert -i ch-image -o dir opencode "${CH_STORAGE}/opencode"
   fi
-  popd > /dev/null
+  popd > /dev/null || exit
 
   CMD="ch-run --write-fake --private-tmp -b '${APP_DIR}':'${APP_DIR}' --cd '${APP_DIR}'"
   # Add additional volumes
