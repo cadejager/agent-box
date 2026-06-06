@@ -72,9 +72,14 @@ fi
 IMAGE="opencode"
 CONTAINERFILE="Containerfile.opencode"
 AGENT_BIN="/usr/local/bin/opencode"
+# opencode spreads its state across four XDG dirs: ~/.config (user config),
+# ~/.local/share (auth.json + session db), ~/.cache, and ~/.local/state. Mount
+# all four so login, sessions, and cache survive the ephemeral --rm container.
 CONFIG_MOUNTS=(
   "${HOME}/.config/opencode/:/root/.config/opencode/"
   "${HOME}/.local/share/opencode/:/root/.local/share/opencode/"
+  "${HOME}/.cache/opencode/:/root/.cache/opencode/"
+  "${HOME}/.local/state/opencode/:/root/.local/state/opencode/"
 )
 ENV_FORWARD=()
 ENV_LITERAL=(OPENCODE_ENABLE_EXA=1 OPENCODE_EXPERIMENTAL_LSP_TOOL=true)

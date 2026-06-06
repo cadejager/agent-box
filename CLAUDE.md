@@ -29,7 +29,7 @@ There is no separate build/lint/test step — agent images build lazily on first
 1. Auto-detects the engine — prefers Charliecloud (`ch-run`) if present, else podman; `-t` overrides.
 2. Lazily builds `agent-base`, then the tool image, if missing (`-b` deletes and rebuilds both).
 3. Mounts the target dir **at the same absolute path inside the container**, so file paths in agent output stay valid on the host; extra `-v` volumes follow the same host==container rule.
-4. Bind-mounts host agent config/state — auto-creating each source dir/file if missing (`agent::ensure_config_sources`), so a fresh user can launch — while keeping the container itself ephemeral (`--rm`): ccc → `~/.claude/` + `~/.claude.json`; occ → `~/.config/opencode/` + `~/.local/share/opencode/`; cdx → `~/.codex/`.
+4. Bind-mounts host agent config/state — auto-creating each source dir/file if missing (`agent::ensure_config_sources`), so a fresh user can launch — while keeping the container itself ephemeral (`--rm`): ccc → `~/.claude/` + `~/.claude.json`; occ → `~/.config/opencode/` + `~/.local/share/opencode/` + `~/.cache/opencode/` + `~/.local/state/opencode/`; cdx → `~/.codex/`.
 
 Adding an agent means a new wrapper + Containerfile; changing engine/build/run behavior means editing `bin/lib/agent-run.sh` once.
 
