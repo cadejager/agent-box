@@ -38,16 +38,7 @@ while getopts "a:v:t:crfbh" opt; do
     v) VOLUMES+=("$OPTARG") ;;
     t) CONTAINER_TYPE=$OPTARG ;;
     c) CONTINUE=true ;;
-    r) RESUME=true
-       # -r takes an OPTIONAL id (getopts can't, so do it by hand): grab the
-       # next token only if it isn't another option, so bare `-r` opens claude's
-       # interactive picker.
-       next="${!OPTIND:-}"
-       if [[ -n "${next}" && "${next}" != -* ]]; then
-         SESSION="${next}"
-         OPTIND=$((OPTIND + 1))
-       fi
-       ;;
+    r) RESUME=true ;;
     f) FORK=true ;;
     b) REBUILD=true ;;
     h|?) usage ;;
@@ -56,6 +47,13 @@ done
 
 # Pass-through: everything after `--` is forwarded to the agent verbatim.
 shift $((OPTIND - 1))
+# -r takes an OPTIONAL session id: grab the first leftover token unless it
+# looks like an option, so bare -r opens the picker. Done after getopts so
+# it works regardless of where -r sits in a combined cluster (e.g. -rc ID).
+if [[ "${RESUME}" == "true" && -z "${SESSION}" && $# -gt 0 && "$1" != -* ]]; then
+  SESSION="$1"
+  shift
+fi
 EXTRA_ARGS=("$@")
 
 # Build claude-code arguments
