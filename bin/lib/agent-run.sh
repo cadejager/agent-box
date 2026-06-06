@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 #
-# Shared implementation for the containerised agent launchers (ccc.sh, occ.sh).
+# Shared implementation for the containerised agent launchers (ccc.sh, occ.sh,
+# cdx.sh).
 #
 # A launcher sources this file, sets the variables below, then calls
 # `agent::launch`. The heavy lifting -- engine detection, lazy image builds for
@@ -62,6 +63,23 @@ agent::normalize_paths() {
   done
 }
 
+# Make sure each CONFIG_MOUNTS host source exists before it is bind-mounted --
+# podman and ch-run both refuse a missing bind source. A trailing slash means a
+# directory; otherwise a file (create the parent dir, then touch it). This lets
+# a fresh user who has never run the host-native tool still launch.
+agent::ensure_config_sources() {
+  local mount host
+  for mount in "${CONFIG_MOUNTS[@]}"; do
+    host="${mount%%:*}"
+    if [[ "${host}" == */ ]]; then
+      mkdir -p "${host}"
+    else
+      mkdir -p "$(dirname "${host}")"
+      [[ -e "${host}" ]] || touch "${host}"
+    fi
+  done
+}
+
 # Copy the host CA bundle into agents/certs/ for the image build. These are
 # baked into agent-base (which every agent image inherits) so containers can get
 # through TLS-intercepting corporate proxies. Run from the agents/ directory.
@@ -70,9 +88,10 @@ agent::normalize_paths() {
 # and update-ca-certificates just adds nothing).
 agent::refresh_certs() {
   local src="${AGENT_CERTS_DIR:-${HOME}/.local/share/certs}"
-  rm -rf certs
-  mkdir -p certs
-  cp "${src}"/* certs/ 2>/dev/null || true
+  local dst="${PROJ_DIR}/agents/certs"
+  rm -rf "${dst}"
+  mkdir -p "${dst}"
+  cp "${src}"/* "${dst}/" 2>/dev/null || true
 }
 
 # Lazily build agent-base then the agent image with podman.
@@ -166,6 +185,7 @@ agent::run_charliecloud() {
 agent::launch() {
   agent::detect_engine
   agent::normalize_paths
+  agent::ensure_config_sources
   case "${CONTAINER_TYPE}" in
     podman)
       agent::build_podman
