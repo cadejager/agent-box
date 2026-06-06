@@ -16,7 +16,8 @@
 #   IMAGE          image/tag name (e.g. claude-code)
 #   CONTAINERFILE  Containerfile under agents/ (e.g. Containerfile.claude-code)
 #   AGENT_BIN      in-container binary to run (e.g. /usr/local/bin/claude)
-#   AGENT_ARGS     extra args appended to AGENT_BIN (leading space, may be empty)
+#   AGENT_ARGS     array of args appended to AGENT_BIN (may be empty)
+#   EXTRA_ARGS     array of pass-through args (after `--`), appended last (may be empty)
 #   CONFIG_MOUNTS  array of "hostpath:containerpath" mounts for agent config
 #   ENV_FORWARD    array of host env var names to forward when set (may be empty)
 #   ENV_LITERAL    array of "VAR=VALUE" always set in the container (may be empty)
@@ -59,22 +60,6 @@ agent::refresh_certs() {
   cp "${HOME}"/.local/share/certs/* certs/ 2>/dev/null || true
 }
 
-# Echo container env-flag args: PREFIXVAR='value' for each ENV_FORWARD var that
-# is set, then PREFIXVAR=VALUE for each ENV_LITERAL entry. PREFIX is "-e " for
-# podman or "--set-env=" for Charliecloud.
-agent::env_args() {
-  local prefix="$1" out="" var kv
-  for var in "${ENV_FORWARD[@]}"; do
-    if [[ -n "${!var:-}" ]]; then
-      out="${out} ${prefix}${var}='${!var}'"
-    fi
-  done
-  for kv in "${ENV_LITERAL[@]}"; do
-    out="${out} ${prefix}${kv}"
-  done
-  printf '%s' "${out}"
-}
-
 # Lazily build agent-base then the agent image with podman.
 agent::build_podman() {
   if [[ "${REBUILD}" == "true" ]]; then
@@ -115,33 +100,49 @@ agent::build_charliecloud() {
   popd > /dev/null || exit
 }
 
-# Build the podman run command (mounting APP_DIR/volumes/config at the same
-# paths) and exec it.
+# Build the podman run argv (mounting APP_DIR/volumes/config at the same paths)
+# and exec it. Built as an array -- no eval, no quoting games.
 agent::run_podman() {
-  local cmd mount
-  cmd="podman run -it --rm -v '${APP_DIR}':'${APP_DIR}' -w '${APP_DIR}'"
+  local args=(run -it --rm -v "${APP_DIR}:${APP_DIR}" -w "${APP_DIR}")
+  local mount var kv
   for mount in "${VOLUMES[@]}"; do
-    cmd="${cmd} -v '${mount}':'${mount}'"
+    args+=(-v "${mount}:${mount}")
   done
   for mount in "${CONFIG_MOUNTS[@]}"; do
-    cmd="${cmd} -v '${mount%%:*}':'${mount#*:}'"
+    args+=(-v "${mount}")
   done
-  cmd="${cmd}$(agent::env_args '-e ') ${IMAGE} ${AGENT_BIN}${AGENT_ARGS}"
-  eval "${cmd}"
+  for var in "${ENV_FORWARD[@]}"; do
+    if [[ -n "${!var:-}" ]]; then
+      args+=(-e "${var}=${!var}")
+    fi
+  done
+  for kv in "${ENV_LITERAL[@]}"; do
+    args+=(-e "${kv}")
+  done
+  args+=("${IMAGE}" "${AGENT_BIN}" "${AGENT_ARGS[@]}" "${EXTRA_ARGS[@]}")
+  podman "${args[@]}"
 }
 
-# Build the Charliecloud ch-run command and exec it.
+# Build the Charliecloud ch-run argv and exec it.
 agent::run_charliecloud() {
-  local cmd mount
-  cmd="ch-run --write-fake --private-tmp -b '${APP_DIR}':'${APP_DIR}' --cd '${APP_DIR}'"
+  local args=(--write-fake --private-tmp -b "${APP_DIR}:${APP_DIR}" --cd "${APP_DIR}")
+  local mount var kv
   for mount in "${VOLUMES[@]}"; do
-    cmd="${cmd} -b '${mount}':'${mount}'"
+    args+=(-b "${mount}:${mount}")
   done
   for mount in "${CONFIG_MOUNTS[@]}"; do
-    cmd="${cmd} -b '${mount%%:*}':'${mount#*:}'"
+    args+=(-b "${mount}")
   done
-  cmd="${cmd}$(agent::env_args '--set-env=') ${CH_STORAGE}/${IMAGE} -- ${AGENT_BIN}${AGENT_ARGS}"
-  eval "${cmd}"
+  for var in "${ENV_FORWARD[@]}"; do
+    if [[ -n "${!var:-}" ]]; then
+      args+=("--set-env=${var}=${!var}")
+    fi
+  done
+  for kv in "${ENV_LITERAL[@]}"; do
+    args+=("--set-env=${kv}")
+  done
+  args+=("${CH_STORAGE}/${IMAGE}" -- "${AGENT_BIN}" "${AGENT_ARGS[@]}" "${EXTRA_ARGS[@]}")
+  ch-run "${args[@]}"
 }
 
 # Detect engine, normalise paths, build images, run.

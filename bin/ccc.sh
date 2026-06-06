@@ -15,7 +15,7 @@ FORK=false
 VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a APP_DIR] [-v VOLUME] [-t TYPE] [-c]  [-e EFFORT] [-s SESSION] [-f] [-r] [-h]"
+  echo "Usage: ${0} [-a APP_DIR] [-v VOLUME] [-t TYPE] [-c]  [-e EFFORT] [-s SESSION] [-f] [-r] [-h] [-- ARGS...]"
   echo "  Container args:"
   echo "    -a       The application directory (default: current dir)"
   echo "             Will be mounted at the same path inside the container"
@@ -28,6 +28,7 @@ usage() {
   echo "    -e       Effort level for the current session (low, medium, high, xhigh, max)"
   echo "    -s       Resume a conversation by session ID, or open interactive picker with optional search term"
   echo "    -f       When resuming, create a new session ID instead of reusing the original (use with -s or -c)"
+  echo "    --       Pass all following arguments straight through to claude"
   echo ""
   echo "  -h       Display this message"
   exit 1
@@ -47,19 +48,23 @@ while getopts "a:v:t:ce:s:frh" opt; do
   esac
 done
 
+# Pass-through: anything after `--` (or any bare args) goes to the agent.
+shift $((OPTIND - 1))
+EXTRA_ARGS=("$@")
+
 # Build claude-code arguments
-AGENT_ARGS=""
+AGENT_ARGS=()
 if [[ "${CONTINUE}" == "true" ]]; then
-  AGENT_ARGS="${AGENT_ARGS} --continue"
+  AGENT_ARGS+=(--continue)
 fi
 if [[ -n "${SESSION}" ]]; then
-  AGENT_ARGS="${AGENT_ARGS} --resume ${SESSION}"
+  AGENT_ARGS+=(--resume "${SESSION}")
 fi
 if [[ "${FORK}" == "true" ]]; then
-  AGENT_ARGS="${AGENT_ARGS} --fork-session"
+  AGENT_ARGS+=(--fork-session)
 fi
 if [[ -n "${EFFORT}" ]]; then
-  AGENT_ARGS="${AGENT_ARGS} --effort ${EFFORT}"
+  AGENT_ARGS+=(--effort "${EFFORT}")
 fi
 
 # Agent-specific container configuration

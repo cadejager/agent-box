@@ -14,7 +14,7 @@ FORK=false
 VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a APP_DIR] [-v VOLUME] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h]"
+  echo "Usage: ${0} [-a APP_DIR] [-v VOLUME] [-t TYPE] [-c] [-s SESSION] [-f] [-r] [-h] [-- ARGS...]"
   echo "  Container args:"
   echo "    -a       The application directory (default: current dir)"
   echo "             Will be mounted at the same path inside the container"
@@ -26,6 +26,7 @@ usage() {
   echo "    -c       Continue the last session"
   echo "    -s       Continue a specific session by ID"
   echo "    -f       Fork the session (use with -c or -s)"
+  echo "    --       Pass all following arguments straight through to opencode"
   echo ""
   echo "  -h       Display this message"
   exit 1
@@ -44,16 +45,20 @@ while getopts "a:v:t:cs:frh" opt; do
   esac
 done
 
+# Pass-through: anything after `--` (or any bare args) goes to the agent.
+shift $((OPTIND - 1))
+EXTRA_ARGS=("$@")
+
 # Build opencode arguments
-AGENT_ARGS=""
+AGENT_ARGS=()
 if [[ "${CONTINUE}" == "true" ]]; then
-  AGENT_ARGS="${AGENT_ARGS} --continue"
+  AGENT_ARGS+=(--continue)
 fi
 if [[ -n "${SESSION}" ]]; then
-  AGENT_ARGS="${AGENT_ARGS} --session ${SESSION}"
+  AGENT_ARGS+=(--session "${SESSION}")
 fi
 if [[ "${FORK}" == "true" ]]; then
-  AGENT_ARGS="${AGENT_ARGS} --fork"
+  AGENT_ARGS+=(--fork)
 fi
 
 # Agent-specific container configuration
