@@ -11,24 +11,24 @@ Bash launchers + Containerfiles for running AI coding agents (Claude Code, Claud
 Agent launchers (`bin/`, runnable from anywhere; default mount target = current dir):
 
 ```bash
-./bin/ccc.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r ID] [-f] [-b]
-./bin/occ.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r ID] [-f] [-b]   # opencode
-./bin/cdx.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r ID] [-f] [-b]   # codex (OpenAI Codex CLI)
-./bin/cdt.sh [-a APP_DIR] [-v VOL] [-g] [-b]                                         # Claude Desktop GUI (podman only)
+./bin/ccc.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r [ID]] [-f] [-b]
+./bin/occ.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r [ID]] [-f] [-b]   # opencode
+./bin/cdx.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r [ID]] [-f] [-b]   # codex (OpenAI Codex CLI)
+./bin/cdt.sh [-a APP_DIR] [-v VOL] [-g] [-b]                                           # Claude Desktop GUI (podman only)
 ```
 
 - `-b` forces an image rebuild; `-t` overrides engine auto-detection; `-h` prints full usage.
-- All three launchers share the same flags `-c` / `-r` / `-f` (continue / resume-by-id / fork), mapped to each agent's native form (for codex these become the `resume`/`fork` subcommands). Everything after `--` is passed through to the agent — that's how you reach per-tool options like `--model`, claude's `--effort`, or codex's `-c model_reasoning_effort=…` (each launcher's `-h` lists the common ones).
+- All three launchers share the same flags `-c` / `-r` / `-f` (continue / resume / fork; bare `-r` opens the session picker, `-r ID` resumes by id), mapped to each agent's native form (for codex these become the `resume`/`fork` subcommands). Everything after `--` is passed through to the agent — that's how you reach per-tool options like `--model`, claude's `--effort`, or codex's `-c model_reasoning_effort=…` (each launcher's `-h` lists the common ones).
 
-There is no separate build/lint/test step — agent images build lazily on first launch (or with `-r`).
+There is no separate build/lint/test step — agent images build lazily on first launch (or with `-b`).
 
 ## Architecture
 
 **Two-stage image hierarchy.** `agents/Containerfile.base` builds `agent-base` (node:trixie + ansible/git/python/C toolchain/rust + host CA certs). Each agent image (`Containerfile.claude-code`, `.claude-desktop`, `.opencode`, `.codex`) is `FROM agent-base` and only installs its own tool. Editing the base affects all of them.
 
-**Launcher pattern — `bin/lib/agent-run.sh` + thin wrappers.** `ccc.sh` and `occ.sh` source the shared lib, declare only what differs (image, Containerfile, config mounts, env vars, agent binary, flag→arg mapping), then call `agent::launch`. The lib:
+**Launcher pattern — `bin/lib/agent-run.sh` + thin wrappers.** `ccc.sh`, `occ.sh`, and `cdx.sh` source the shared lib, declare only what differs (image, Containerfile, config mounts, env vars, agent binary, flag→arg mapping), then call `agent::launch`. The lib:
 1. Auto-detects the engine — prefers Charliecloud (`ch-run`) if present, else podman; `-t` overrides.
-2. Lazily builds `agent-base`, then the tool image, if missing (`-r` deletes and rebuilds both).
+2. Lazily builds `agent-base`, then the tool image, if missing (`-b` deletes and rebuilds both).
 3. Mounts the target dir **at the same absolute path inside the container**, so file paths in agent output stay valid on the host; extra `-v` volumes follow the same host==container rule.
 4. Bind-mounts host agent config/state so the container itself stays ephemeral (`--rm`): ccc → `~/.claude/` + `~/.claude.json`; occ → `~/.config/opencode/` + `~/.local/share/opencode/`.
 
