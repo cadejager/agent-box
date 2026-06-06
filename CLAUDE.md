@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Bash launchers + Containerfiles for running AI coding agents (Claude Code, opencode, codex) inside rootless containers. There is no application code, build system, or test suite — the "source" is shell scripts and container definitions.
+Bash launchers + Containerfiles for running AI coding agents (Claude Code, opencode, codex) inside rootless containers. There is no application code, build system, or test suite — the "source" is shell scripts and container definitions. (Human-facing setup and usage live in `README.md`; this file is the terse, architecture-level reference.)
 
 ## Common commands
 
@@ -29,11 +29,13 @@ There is no separate build/lint/test step — agent images build lazily on first
 1. Auto-detects the engine — prefers Charliecloud (`ch-run`) if present, else podman; `-t` overrides.
 2. Lazily builds `agent-base`, then the tool image, if missing (`-b` deletes and rebuilds both).
 3. Mounts the target dir **at the same absolute path inside the container**, so file paths in agent output stay valid on the host; extra `-v` volumes follow the same host==container rule.
-4. Bind-mounts host agent config/state so the container itself stays ephemeral (`--rm`): ccc → `~/.claude/` + `~/.claude.json`; occ → `~/.config/opencode/` + `~/.local/share/opencode/`.
+4. Bind-mounts host agent config/state — auto-creating each source dir/file if missing (`agent::ensure_config_sources`), so a fresh user can launch — while keeping the container itself ephemeral (`--rm`): ccc → `~/.claude/` + `~/.claude.json`; occ → `~/.config/opencode/` + `~/.local/share/opencode/`; cdx → `~/.codex/`.
 
 Adding an agent means a new wrapper + Containerfile; changing engine/build/run behavior means editing `bin/lib/agent-run.sh` once.
 
-**Charliecloud vs podman.** Podman runs the tool images directly. Charliecloud builds the same Containerfiles via `ch-image`, converts them to dir format under `agents/.charliecloud/`, and runs them unprivileged with `ch-run --write-fake --private-tmp`. Both paths produce the same mount layout.
+**Ephemeral by design.** Containers run `--rm`, so anything installed *globally* inside (apt/pip/npm) is discarded next run; persist work in the mounted dir instead — a project `.venv`/`node_modules` survive because `APP_DIR` is bind-mounted at the same path.
+
+**Charliecloud vs podman.** Podman runs the tool images directly. Charliecloud builds the same Containerfiles via `ch-image`, converts them to dir format under `agents/.charliecloud/`, and runs them unprivileged with `ch-run --write-fake --private-tmp`. Both paths produce the same mount layout. Two ch-run specifics (untested in the podman-only dev env — verify on HPC): a missing `-b` destination auto-creates as a *directory*, so `Containerfile.claude-code` pre-`touch`es `/root/.claude.json` for that file-bind; and forwarded env values use `--env-no-expand` so colon/`$` values aren't path-expanded.
 
 **Custom CA certs.** Before building, launchers copy `~/.local/share/certs/*` into `agents/certs/` (gitignored); the base image `COPY`s them in and runs `update-ca-certificates` — needed behind TLS-intercepting proxies. Missing certs are silently skipped.
 
