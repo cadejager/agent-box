@@ -12,16 +12,17 @@ APP_DIR=$(pwd)
 CONTAINER_TYPE=""
 REBUILD=false
 CONTINUE=false
+RESUME=false
 SESSION=""
 FORK=false
 VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r ID] [-f] [-b] [-h] [-- ARGS...]"
+  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r [ID]] [-f] [-b] [-h] [-- ARGS...]"
   agent::usage_container
   echo "  Claude Code session:"
   echo "    -c       Continue the most recent session"
-  echo "    -r ID    Resume session ID"
+  echo "    -r [ID]  Resume session ID, or open the interactive picker if no ID"
   echo "    -f       Fork instead of resume (use with -r or -c)"
   echo "  Pass-through after -- (common claude flags):"
   echo "    --model sonnet|opus|<name>    --effort low|medium|high|xhigh|max"
@@ -31,13 +32,22 @@ usage() {
   exit 1
 }
 
-while getopts "a:v:t:cr:fbh" opt; do
+while getopts "a:v:t:crfbh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
     t) CONTAINER_TYPE=$OPTARG ;;
     c) CONTINUE=true ;;
-    r) SESSION=$OPTARG ;;
+    r) RESUME=true
+       # -r takes an OPTIONAL id (getopts can't, so do it by hand): grab the
+       # next token only if it isn't another option, so bare `-r` opens claude's
+       # interactive picker.
+       next="${!OPTIND:-}"
+       if [[ -n "${next}" && "${next}" != -* ]]; then
+         SESSION="${next}"
+         OPTIND=$((OPTIND + 1))
+       fi
+       ;;
     f) FORK=true ;;
     b) REBUILD=true ;;
     h|?) usage ;;
@@ -53,8 +63,12 @@ AGENT_ARGS=()
 if [[ "${CONTINUE}" == "true" ]]; then
   AGENT_ARGS+=(--continue)
 fi
-if [[ -n "${SESSION}" ]]; then
-  AGENT_ARGS+=(--resume "${SESSION}")
+if [[ "${RESUME}" == "true" ]]; then
+  if [[ -n "${SESSION}" ]]; then
+    AGENT_ARGS+=(--resume "${SESSION}")
+  else
+    AGENT_ARGS+=(--resume)
+  fi
 fi
 if [[ "${FORK}" == "true" ]]; then
   AGENT_ARGS+=(--fork-session)
