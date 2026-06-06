@@ -11,6 +11,7 @@ source "$( dirname -- "${BASH_SOURCE[0]}" )/lib/agent-run.sh"
 APP_DIR=$(pwd)
 CONTAINER_TYPE=""
 REBUILD=false
+HOST_NET=false
 CONTINUE=false
 RESUME=false
 SESSION=""
@@ -18,7 +19,7 @@ FORK=false
 VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r [ID]] [-f] [-b] [-h] [-- ARGS...]"
+  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r [ID]] [-f] [-b] [-n] [-h] [-- ARGS...]"
   agent::usage_container
   echo "  Claude Code session:"
   echo "    -c       Continue the most recent session"
@@ -32,7 +33,7 @@ usage() {
   exit 1
 }
 
-while getopts "a:v:t:crfbh" opt; do
+while getopts "a:v:t:crfbnh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
@@ -41,6 +42,7 @@ while getopts "a:v:t:crfbh" opt; do
     r) RESUME=true ;;
     f) FORK=true ;;
     b) REBUILD=true ;;
+    n) HOST_NET=true ;;
     h|?) usage ;;
   esac
 done

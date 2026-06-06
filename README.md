@@ -43,6 +43,7 @@ All three launchers take the same flags:
 | `-r [ID]` | Resume session `ID`; with no ID, open the agent's interactive session picker |
 | `-f` | Fork instead of resume |
 | `-b` | Rebuild the images |
+| `-n` | Use host networking so the container can reach host services (e.g. LM Studio) on `localhost` |
 | `-h` | Show help (incl. a per-tool pass-through cheat-sheet) |
 | `-- ARGS…` | Everything after `--` is passed straight through to the underlying agent |
 
@@ -66,10 +67,12 @@ The unified flags map to each tool's native form (claude `--resume`, opencode `-
 
 ## Pointing an agent at a local model
 
-Serve the model yourself (e.g. LM Studio), then:
+Serve the model yourself (e.g. LM Studio), then point the agent at `http://localhost:<port>` through its usual env/config:
 
 - **Claude Code** — export `ANTHROPIC_BASE_URL` (and optionally `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_DEFAULT_SONNET_MODEL`); they're forwarded into the container when set.
 - **Codex** — set the endpoint in `~/.codex/config.toml` (codex ignores `OPENAI_BASE_URL`), or use `./bin/cdx.sh -- --oss --local-provider lmstudio`.
+
+> **Reaching a server on the host `localhost`.** Under podman the container has its own network namespace, so its `localhost` is *not* the host's — a server bound to the host's `127.0.0.1:<port>` is unreachable by default. Pass **`-n`** to share the host network (`--network=host`) so `localhost:<port>` inside the container is the host's. (Charliecloud already shares the host network, so `-n` is a no-op there.)
 
 ## Corporate CA certs
 
