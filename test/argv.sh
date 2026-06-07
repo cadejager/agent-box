@@ -43,15 +43,17 @@ exits()  { local want=$1; shift; HOME="${THOME}" "${AGTBOX}" "$@" >/dev/null 2>&
 # Things that MUST hold for every tool (one image, union env, one config mount).
 common() {
   has "ARG:agent-box"                                                  # one image, every tool
-  has "ARG:${THOME}/.config/agent-box/:/root/.config/agent-box/"       # single consolidated config mount
-  has "ARG:${THOME}/.config/agent-box/claude.json:/root/.claude.json"  # claude.json file bind
-  has "agent-box/pip/:/root/.cache/pip/"                               # shared caches
-  has "agent-box/npm/:/root/.npm/"
+  has "ARG:${THOME}/.config/agent-box/:/root/.config/agent-box/"       # the ONE bind mount
   has "ARG:CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1"                    # env UNION, present regardless of tool
   has "ARG:OPENCODE_ENABLE_EXA=1"
   has "ARG:OPENCODE_EXPERIMENTAL_LSP_TOOL=true"
   hasx "ARG:--"                                                        # defensive standalone -- before image
   hasnot "ARG:claude-code"                                             # no per-tool image tag any more
+  # Everything else is consolidated INTO the single mount via in-image symlinks,
+  # so none of these appear as separate mounts any more:
+  hasnot ":/root/.claude.json"                                         # claude.json: symlink, not a file bind
+  hasnot ":/root/.cache/pip/"                                          # pip cache: symlink, not a mount
+  hasnot ":/root/.npm/"                                                # npm cache: symlink, not a mount
   hasnot "ARG:${THOME}/.claude/:/root/.claude/"                        # old per-tool config mounts gone
   hasnot "ARG:${THOME}/.config/opencode/:/root/.config/opencode/"
   hasnot "ARG:${THOME}/.codex/:/root/.codex/"

@@ -11,7 +11,7 @@ There's no application code here — the "source" is one Bash launcher (`agtbox.
 - **Isolation.** The agent runs in an ephemeral (`--rm`) container — the container *is* the security boundary. Anything it installs or breaks is gone next run.
 - **One launcher, one image, no obfuscation.** A single `agtbox.sh` runs any of the three agents from one `agent-box` image, and you pass each tool's *own* flags straight through — nothing new to learn or quote around.
 - **Runs where you do.** Rootless podman locally, Charliecloud on HPC, and behind TLS-intercepting corporate proxies (your CA certs are baked into the image).
-- **Config travels, container doesn't.** All your agent config lives in one host dir (`~/.config/agent-box/`), bind-mounted in, so auth and history persist while the container stays disposable.
+- **Config travels, container doesn't.** All your agent config lives in one host dir (`~/.config/agent-box/`) — a single bind mount — so auth and history persist while the container stays disposable.
 
 ## Requirements
 
@@ -66,8 +66,8 @@ Session handling is just each tool's native syntax: claude `--continue` / `--res
 - **One image.** `container/Containerfile` builds `agent-box` (Node + a build toolchain + common CLI tools + your CA certs + all three agent CLIs). Built lazily on first launch, or on demand with `-b`.
 - **One self-contained launcher.** `bin/agtbox.sh` handles engine detection, the lazy image build, and constructing the run command (as an argv array — no `eval`). The tool name just selects the binary (`/usr/local/bin/<tool>`); image, env, and config mounts are the same for every agent.
 - **Same-path mounts.** Your working dir and any `-v` / `-r` volumes mount at the identical absolute path inside the container, keeping file paths valid on both sides.
-- **Consolidated config.** Every tool's config lives under one host dir, `~/.config/agent-box/`, bind-mounted in; inside the image, symlinks point each tool's expected path (`~/.claude`, `~/.codex`, opencode's XDG dirs) into it (see `container/config-layout.sh`, the single source of truth for that layout). One dir to back up or wipe.
-- **Disposable container, persistent config.** The container runs `--rm`; your config persists via that mount. Anything installed *globally* inside (apt/pip/npm) does **not** survive — keep project deps in the project (a `.venv`, `node_modules`, …; a `.venv` is also how to `pip install` on the Debian image, which blocks system-wide installs). The pip/npm **download caches** are shared host-side under `~/.cache/agent-box/`, so global re-installs are fast (and that dir is safe to delete).
+- **Consolidated config — one mount.** Every tool's config *and* the pip/npm caches live under one host dir, `~/.config/agent-box/` — the launcher's **only** bind mount. Inside the image, symlinks point each tool's expected path (`~/.claude`, `~/.claude.json`, `~/.codex`, opencode's XDG dirs, `~/.cache/pip`, `~/.npm`) into it (see `container/config-layout.sh`, the single source of truth for the layout). One dir to back up or wipe.
+- **Disposable container, persistent config.** The container runs `--rm`; your config persists via that mount. Anything installed *globally* inside (apt/pip/npm) does **not** survive — keep project deps in the project (a `.venv`, `node_modules`, …; a `.venv` is also how to `pip install` on the Debian image, which blocks system-wide installs). The pip/npm **download caches** ride that same mount (under `~/.config/agent-box/cache/`), so global re-installs are fast (and that `cache/` subdir is safe to delete).
 - **Host-local time.** The launcher derives your host timezone and forwards it (`TZ`), so the agent's clock matches the host instead of defaulting to UTC.
 
 ## Pointing an agent at a local model
@@ -98,7 +98,7 @@ CLAUDE.md                 # terse architecture reference (for AI assistants)
 
 - **Charliecloud is implemented but verify on your own HPC host** — the primary dev environment is podman-only.
 - The container runs as **root**, mounts your working tree read-write, and mounts your whole `~/.config/agent-box/` (all three tools' config, incl. credentials) on every run — intentional (the container is the trust boundary). Don't point the launcher at code or images you don't trust.
-- **Upgrading from the old per-tool launchers?** Reclaim the now-unused images/caches: `podman image rm agent-base claude-code opencode codex` and `rm -rf ~/.cache/podman-ai-agents`. Agent config now lives in `~/.config/agent-box/` (first run starts fresh / re-login).
+- **Upgrading from the old per-tool launchers?** Reclaim the now-unused images/caches: `podman image rm agent-base claude-code opencode codex` and `rm -rf ~/.cache/podman-ai-agents ~/.cache/agent-box` (caches now live under `~/.config/agent-box/cache/`). Agent config now lives in `~/.config/agent-box/` (first run starts fresh / re-login).
 - See [`CLAUDE.md`](CLAUDE.md) for the architecture-level reference.
 
 ## License

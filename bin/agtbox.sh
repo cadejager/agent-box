@@ -20,22 +20,14 @@ PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
 IMAGE="agent-box"
 CONTAINERFILE="Containerfile"
 
-# Engine-agnostic mounts shared by every run: persist the pip + npm download
-# caches across the ephemeral --rm container so re-installs are fast. These bind
-# the DEFAULT cache paths, so no env vars are needed. Host root is outside the
-# repo and safe to delete. Sources end in "/" so they auto-create.
-SHARED_MOUNTS=(
-  "${HOME}/.cache/agent-box/pip/:/root/.cache/pip/"
-  "${HOME}/.cache/agent-box/npm/:/root/.npm/"
-)
-
-# All tool config lives under one host dir, ~/.config/agent-box, bind-mounted in;
-# the image symlinks each tool's expected path into it (see
-# container/config-layout.sh). ~/.claude.json is a single file, bind-mounted
-# directly. Tool-independent -- the same config mounts for every agent.
+# ONE bind mount does it all. Every tool's config AND the pip/npm download caches
+# live under one host dir, ~/.config/agent-box, mounted to the same path inside.
+# The image symlinks each tool's expected path -- ~/.claude, ~/.claude.json,
+# ~/.codex, opencode's XDG dirs, ~/.cache/pip, ~/.npm -- INTO it, so the launcher
+# needs exactly one mount and zero per-tool knowledge. container/config-layout.sh
+# is the single source of truth for that whole layout (and creates this host dir).
 CONFIG_MOUNTS=(
   "${HOME}/.config/agent-box/:/root/.config/agent-box/"
-  "${HOME}/.config/agent-box/claude.json:/root/.claude.json"
 )
 
 # Every tool's env, always exported (a tool ignores env it doesn't read), so the
@@ -119,23 +111,14 @@ agent::normalize_paths() {
   RO_VOLUMES=("${kept[@]}")
 }
 
-# Create the host config layout + bind sources so a fresh user can launch.
-# config-layout.sh (the same script baked into the image) makes the per-tool
-# target subdirs under ~/.config/agent-box -- single source of truth for the
-# layout. The loop then creates the remaining bind sources (the ~/.claude.json
-# file + the cache dirs). Both engines refuse a missing bind source.
+# Create the host side of the consolidated layout so a fresh user can launch.
+# config-layout.sh (the same script baked into the image) creates every target
+# subdir + seed file under ~/.config/agent-box -- the single bind source. Run
+# WITHOUT --symlinks here: on the host we only need the dirs/files to exist (the
+# in-container symlinks are baked into the image). Both engines refuse a missing
+# bind source, and config-layout.sh never clobbers existing config.
 agent::ensure_config_sources() {
   bash "${PROJ_DIR}/container/config-layout.sh" "${HOME}/.config/agent-box"
-  local mount host
-  for mount in "${CONFIG_MOUNTS[@]}" "${SHARED_MOUNTS[@]}"; do
-    host="${mount%%:*}"
-    if [[ "${host}" == */ ]]; then
-      mkdir -p "${host}"
-    else
-      mkdir -p "$(dirname "${host}")"
-      [[ -e "${host}" ]] || touch "${host}"
-    fi
-  done
 }
 
 # Copy the host CA bundle into container/certs/ for the image build. Baked into
@@ -192,9 +175,6 @@ agent::run_podman() {
   for mount in "${CONFIG_MOUNTS[@]}"; do
     args+=(-v "${mount}")
   done
-  for mount in "${SHARED_MOUNTS[@]}"; do
-    args+=(-v "${mount}")
-  done
   for var in "${ENV_FORWARD[@]}"; do
     if [[ -n "${!var:-}" ]]; then
       args+=(-e "${var}=${!var}")
@@ -225,9 +205,6 @@ agent::run_charliecloud() {
     done
   fi
   for mount in "${CONFIG_MOUNTS[@]}"; do
-    args+=(-b "${mount}")
-  done
-  for mount in "${SHARED_MOUNTS[@]}"; do
     args+=(-b "${mount}")
   done
   # --env-no-expand makes ch-run pass the value verbatim (no path/$-expansion).

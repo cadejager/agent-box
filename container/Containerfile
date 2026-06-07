@@ -17,16 +17,15 @@ RUN apt-get update \
 COPY certs/ /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
-# Consolidated config layout. Run with --symlinks BEFORE the CLI installs so the
-# installers write THROUGH the links into ~/.config/agent-box (which the launcher
-# bind-mounts from the host) rather than creating conflicting real dirs. The same
-# script sets up the host side, so the layout is defined in exactly one place.
-# ~/.claude.json is a single file, bind-mounted by the launcher (touch'd here so
-# the bind destination exists -- Charliecloud auto-creates a missing dest as a dir).
+# Consolidated layout. Run with --symlinks BEFORE the CLI installs so the tools
+# -- and npm itself, for its cache -- write THROUGH the links into
+# ~/.config/agent-box (which the launcher bind-mounts from the host) rather than
+# creating conflicting real dirs. The same script sets up the host side, so the
+# whole layout (config dirs, ~/.claude.json, and the pip/npm caches) is defined
+# in exactly one place.
 COPY config-layout.sh /usr/local/bin/agtbox-config-layout
 RUN chmod +x /usr/local/bin/agtbox-config-layout \
- && /usr/local/bin/agtbox-config-layout /root/.config/agent-box --symlinks \
- && touch /root/.claude.json
+ && /usr/local/bin/agtbox-config-layout /root/.config/agent-box --symlinks
 
 # All three agent CLIs (binary name == tool name; under /usr/local/bin).
 RUN npm install -g @anthropic-ai/claude-code opencode-ai @openai/codex
