@@ -37,12 +37,13 @@ export PATH="${STUB}:${PATH}"
 rc=0
 OUT=""
 run()    { OUT=$("${AGTBOX}" "$@" 2>&1) || true; }
-has()    { grep -Fq -- "$1" <<<"${OUT}" || { echo "  FAIL: expected [$1]"; rc=1; }; }
-hasnot() { grep -Fq -- "$1" <<<"${OUT}" && { echo "  FAIL: unexpected [$1]"; rc=1; }; }
+has()    { grep -Fq  -- "$1" <<<"${OUT}" || { echo "  FAIL: expected [$1]"; rc=1; }; }
+hasx()   { grep -Fxq -- "$1" <<<"${OUT}" || { echo "  FAIL: expected exact line [$1]"; rc=1; }; }
+hasnot() { grep -Fq  -- "$1" <<<"${OUT}" && { echo "  FAIL: unexpected [$1]"; rc=1; }; }
 exits()  { local want=$1; shift; "${AGTBOX}" "$@" >/dev/null 2>&1; local got=$?
            [[ "${got}" == "${want}" ]] || { echo "  FAIL: exit ${got} != ${want} for: $*"; rc=1; }; }
 
-echo "[claude] -r read-only, image/binary/env, verbatim passthrough, defensive --"
+echo "[claude] -r read-only, image/binary/env, verbatim passthrough"
 run -t podman -r "${TMP}/ro" claude --resume X
 has "ARG:${TMP}/ro:${TMP}/ro:ro"
 has "ARG:claude-code"
@@ -50,15 +51,16 @@ has "ARG:/usr/local/bin/claude"
 has "ARG:--resume"
 has "ARG:X"
 has "ARG:CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1"
-has "ARG:--"
+hasx "ARG:--"            # exact-line: the defensive standalone -- before the image
 hasnot "ARG:opencode"
 
-echo "[claude] plain launch: no session-flag remapping leaks in; shared caches mounted"
+echo "[claude] plain launch: no session-flag remapping leaks in; shared caches; defensive --"
 run -t podman claude
 hasnot "ARG:--continue"
 hasnot "ARG:--resume"
 has "podman-ai-agents/pip/:/root/.cache/pip/"
 has "podman-ai-agents/npm/:/root/.npm/"
+hasx "ARG:--"            # the only -- here is the defensive one (no passthrough args)
 
 echo "[opencode] image + four config mounts + verbatim --session"
 run -t podman opencode --session Y
@@ -77,17 +79,23 @@ has "ARG:${HOME}/.codex/:/root/.codex/"
 has "ARG:resume"
 has "ARG:Z"
 
-echo "[mix] -v rw + -r ro both mounted at the same path"
+echo "[mix] -v rw + -r ro (different paths) both mounted at the same path"
 run -t podman -v "${TMP}/rw" -r "${TMP}/ro" claude foo
 has "ARG:${TMP}/rw:${TMP}/rw"
 has "ARG:${TMP}/ro:${TMP}/ro:ro"
 has "ARG:foo"
 
+echo "[dedup] same path via -v and -r: rw wins, ro mount dropped, warning"
+run -t podman -v "${TMP}/ro" -r "${TMP}/ro" claude foo
+has "given as both -v (rw) and -r (ro)"
+hasnot "ARG:${TMP}/ro:${TMP}/ro:ro"
+has "ARG:${TMP}/ro:${TMP}/ro"
+
 echo "[charliecloud] -b binds + --set-env + -- before the command"
 run -t charliecloud claude --resume X
 has "ARG:-b"
 has "ARG:--set-env=CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1"
-has "ARG:--"
+hasx "ARG:--"
 
 echo "[errors] no tool / unknown tool / -h all exit 1"
 exits 1 -t podman

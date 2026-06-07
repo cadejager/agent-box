@@ -194,7 +194,7 @@ agent::run_podman() {
   # `--` ends podman's own option parsing before the image + command, so a
   # passed-through tool arg that starts with `-` can never be misread as a
   # podman flag (and mirrors the ch-run path below).
-  args+=(-- "${IMAGE}" "${AGENT_BIN}" "${AGENT_ARGS[@]}" "${EXTRA_ARGS[@]}")
+  args+=(-- "${IMAGE}" "${AGENT_BIN}" "${EXTRA_ARGS[@]}")
   podman "${args[@]}"
 }
 
@@ -230,7 +230,7 @@ agent::run_charliecloud() {
   for kv in "${ENV_LITERAL[@]}"; do
     args+=(--env-no-expand "--set-env=${kv}")
   done
-  args+=("${CH_STORAGE}/${IMAGE}" -- "${AGENT_BIN}" "${AGENT_ARGS[@]}" "${EXTRA_ARGS[@]}")
+  args+=("${CH_STORAGE}/${IMAGE}" -- "${AGENT_BIN}" "${EXTRA_ARGS[@]}")
   ch-run "${args[@]}"
 }
 
@@ -281,7 +281,6 @@ CONTAINER_TYPE=""
 REBUILD=false
 VOLUMES=()
 RO_VOLUMES=()
-AGENT_ARGS=()   # no flag mapping any more -- tool args pass through verbatim
 
 # getopts stops at the first non-option token (the tool name), so container
 # flags are parsed here and everything from the tool name on is left in "$@".
