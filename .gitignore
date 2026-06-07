@@ -4,5 +4,5 @@
 # Certificate bundle copied in at image-build time (see bin/*.sh + Containerfile.base)
 agents/certs/
 
-# Charliecloud image store (built by bin/ccc.sh / bin/occ.sh)
+# Charliecloud image store (built by bin/agtbox.sh)
 agents/.charliecloud/
