@@ -201,9 +201,27 @@ agent::run_charliecloud() {
   ch-run "${args[@]}"
 }
 
+# Derive the host timezone (IANA name) and forward it so containers report
+# host-local time instead of UTC. tzdata in agent-base resolves the name. Tried
+# in order: timedatectl, /etc/timezone, the /etc/localtime symlink, then $TZ.
+# If nothing is derivable, TZ is left unset and the container stays UTC (current
+# behaviour). Appended to ENV_LITERAL so both the podman (-e) and ch-run
+# (--set-env) emission loops forward it unchanged.
+agent::derive_tz() {
+  local tz=""
+  if command -v timedatectl >/dev/null 2>&1; then
+    tz=$(timedatectl show -p Timezone --value 2>/dev/null)
+  fi
+  [[ -z "${tz}" && -r /etc/timezone ]] && tz=$(cat /etc/timezone 2>/dev/null)
+  [[ -z "${tz}" ]] && tz=$(readlink -f /etc/localtime 2>/dev/null | sed -n 's#.*/zoneinfo/##p')
+  [[ -z "${tz}" ]] && tz="${TZ:-}"
+  [[ -n "${tz}" ]] && ENV_LITERAL+=("TZ=${tz}")
+}
+
 # Detect engine, normalise paths, build images, run.
 agent::launch() {
   agent::detect_engine
+  agent::derive_tz
   agent::normalize_paths
   agent::ensure_config_sources
   case "${CONTAINER_TYPE}" in

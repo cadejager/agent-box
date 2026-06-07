@@ -63,6 +63,7 @@ The unified flags map to each tool's native form (claude `--resume`, opencode `-
 - **Shared launcher library.** `bin/lib/agent-run.sh` handles engine detection, lazy image builds, and constructing the run command (as an argv array — no `eval`). `ccc.sh` / `occ.sh` / `cdx.sh` are thin wrappers that declare only what differs (image, config mounts, env vars, agent binary, flag mapping).
 - **Same-path mounts.** Your working dir and any `-v` volumes mount at the identical absolute path inside the container, keeping file paths valid on both sides.
 - **Disposable container, persistent config.** Containers run `--rm`. Your host config/login dirs are bind-mounted so sessions persist — but anything installed *globally* inside the container (apt/pip/npm) does **not** survive. Keep project dependencies in the project (a `.venv`, `node_modules`, …); those live in the mounted dir and persist across runs (a `.venv` is also how to `pip install` on the Debian-based image, which blocks system-wide installs). The pip and npm **download caches** are shared host-side under `~/.cache/podman-ai-agents/`, so global re-installs are fast (fetched once, then served from cache); that directory is safe to delete to reclaim space.
+- **Host-local time.** The launcher derives your host timezone and forwards it (`TZ`), so the agent's clock matches the host instead of defaulting to UTC. If the zone can't be determined, the container stays on UTC.
 
 ## Pointing an agent at a local model
 
