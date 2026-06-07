@@ -1,0 +1,34 @@
+FROM node:trixie
+
+# Agent Box: one image with the shared toolchain + all three agent CLIs.
+# (Future language-specific images can build FROM agent-box.)
+#
+# Toolchain (single layer; fail fast on update errors, skip recommended
+# packages, drop the apt lists afterward to keep the image smaller).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ansible bubblewrap curl git less rsync \
+      python3 pip python3-venv python3-dev pipx \
+      gcc g++ gdb valgrind cmake rust-all \
+      ripgrep jq tree fd-find sqlite3 zip shellcheck \
+ && rm -rf /var/lib/apt/lists/*
+
+# Host CA certs (baked in for TLS-intercepting proxies).
+COPY certs/ /usr/local/share/ca-certificates/
+RUN update-ca-certificates
+
+# Consolidated config layout. Run with --symlinks BEFORE the CLI installs so the
+# installers write THROUGH the links into ~/.config/agent-box (which the launcher
+# bind-mounts from the host) rather than creating conflicting real dirs. The same
+# script sets up the host side, so the layout is defined in exactly one place.
+# ~/.claude.json is a single file, bind-mounted by the launcher (touch'd here so
+# the bind destination exists -- Charliecloud auto-creates a missing dest as a dir).
+COPY config-layout.sh /usr/local/bin/agtbox-config-layout
+RUN chmod +x /usr/local/bin/agtbox-config-layout \
+ && /usr/local/bin/agtbox-config-layout /root/.config/agent-box --symlinks \
+ && touch /root/.claude.json
+
+# All three agent CLIs (binary name == tool name; under /usr/local/bin).
+RUN npm install -g @anthropic-ai/claude-code opencode-ai @openai/codex
+
+WORKDIR /app

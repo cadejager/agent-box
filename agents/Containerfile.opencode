@@ -1,6 +1,0 @@
-FROM agent-base
-
-# Install opencode
-RUN npm i -g opencode-ai
-
-WORKDIR /app

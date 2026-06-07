@@ -1,8 +1,8 @@
 # Per-user Claude Code settings (machine-local, should not be committed)
 .claude/settings.local.json
 
-# Certificate bundle copied in at image-build time (see bin/*.sh + Containerfile.base)
-agents/certs/
+# Certificate bundle copied in at image-build time (see bin/agtbox.sh + container/Containerfile)
+container/certs/
 
 # Charliecloud image store (built by bin/agtbox.sh)
-agents/.charliecloud/
+container/.charliecloud/
