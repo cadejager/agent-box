@@ -1,63 +1,55 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 #
-# Shared implementation for the containerised agent launchers (ccc.sh, occ.sh,
-# cdx.sh).
+# agtbox.sh -- run an AI coding agent inside a rootless container.
 #
-# A launcher sources this file, sets the variables below, then calls
-# `agent::launch`. The heavy lifting -- engine detection, lazy image builds for
-# both podman and Charliecloud, and constructing the run command -- lives here,
-# so the per-agent wrappers only describe what differs between agents.
+#   agtbox.sh [-a DIR] [-v VOL] [-r VOL] [-t podman|charliecloud] [-b] [-h] \
+#             claude|opencode|codex [tool args...]
 #
-# Variables the wrapper must set before calling agent::launch:
-#   APP_DIR        host dir mounted at the same path inside the container
-#   VOLUMES        array of extra host paths to bind at the same path
-#   RO_VOLUMES     array of extra host paths to bind READ-ONLY at the same path
-#                  (podman enforces :ro; charliecloud has no ro bind, so it mounts
-#                  these read-write and warns; may be empty)
-#   CONTAINER_TYPE "podman" | "charliecloud" | "" to auto-detect
-#   REBUILD        "true" to rebuild images first
-#   IMAGE          image/tag name (e.g. claude-code)
-#   CONTAINERFILE  Containerfile under agents/ (e.g. Containerfile.claude-code)
-#   AGENT_BIN      in-container binary to run (e.g. /usr/local/bin/claude)
-#   AGENT_ARGS     array of args appended to AGENT_BIN (may be empty)
-#   EXTRA_ARGS     array of pass-through args (after `--`), appended last (may be empty)
-#   CONFIG_MOUNTS  array of "hostpath:containerpath" mounts for agent config
-#   ENV_FORWARD    array of host env var names to forward when set and non-empty (may be empty)
-#   ENV_LITERAL    array of "VAR=VALUE" always set in the container (may be empty)
-#
-# The lib itself also sets SHARED_MOUNTS -- engine-agnostic bind mounts applied to
-# every agent (currently the pip + npm download caches; see its definition below).
-#
-# Those wrapper-provided globals are referenced here without local assignment:
-# shellcheck disable=SC2154
+# One launcher for all three agents. Container flags come BEFORE the tool name;
+# everything AFTER the tool name is passed to the tool VERBATIM -- use the tool's
+# own flags (e.g. `claude --resume ID`, `opencode --session ID`, `codex resume`).
+# Requires bash >= 4 (arrays, ${!var}).
 
-# Repo root, derived from this file's location (bin/lib/agent-run.sh).
-PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/../.." &> /dev/null && pwd )
+set -eo pipefail
+
+# Repo root, derived from this file's location (bin/agtbox.sh).
+PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
 
 # Engine-agnostic mounts shared by every agent: persist the pip + npm download
 # caches across the ephemeral --rm container so re-installs are fast. These bind
 # the DEFAULT cache paths, so no env vars are needed -- the tools just find a warm
 # cache. The host root lives outside the repo (no .gitignore entry needed) and is
-# safe to delete to reclaim space. Sources end in "/" so agent::ensure_config_sources
+# safe to delete to reclaim space. Sources end in "/" so ensure_config_sources
 # auto-creates them.
 SHARED_MOUNTS=(
   "${HOME}/.cache/podman-ai-agents/pip/:/root/.cache/pip/"
   "${HOME}/.cache/podman-ai-agents/npm/:/root/.npm/"
 )
 
-# Shared "Container args" section for the launchers' -h output. Each wrapper
-# calls this, then prints its own tool-specific session + pass-through lines.
-agent::usage_container() {
+usage() {
+  echo "Usage: ${0##*/} [-a DIR] [-v VOL] [-r VOL] [-t podman|charliecloud] [-b] [-h] <claude|opencode|codex> [tool args...]"
+  echo
+  echo "  Run an AI coding agent in a rootless container. Container flags go BEFORE"
+  echo "  the tool name; everything after the tool name is passed to the tool"
+  echo "  verbatim (run '${0##*/} <tool> --help' for the tool's own help)."
+  echo
   echo "  Container args:"
   echo "    -a DIR   App directory, mounted at the same path inside (default: cwd)"
   echo "    -v VOL   Extra volume, mounted at the same path inside (repeatable)"
   echo "    -r VOL   Extra volume, mounted READ-ONLY at the same path (repeatable; podman only -- charliecloud mounts rw)"
   echo "    -t TYPE  Engine: podman or charliecloud (default: auto-detect)"
   echo "    -b       Rebuild images"
+  echo "    -h       Show this help"
+  echo
+  echo "  Native session flags (typed after the tool name -- no remapping):"
+  echo "    claude     --continue | --resume [ID] | --fork-session"
+  echo "    opencode   --continue | --session ID  | --fork"
+  echo "    codex      resume [ID] | fork [ID]"
+  exit 1
 }
 
-# Pick an engine if the wrapper did not force one with -t. Prefers Charliecloud.
+# Pick an engine if not forced with -t. Prefers Charliecloud.
 agent::detect_engine() {
   if [[ -n "${CONTAINER_TYPE}" ]]; then
     return
@@ -199,7 +191,10 @@ agent::run_podman() {
   for kv in "${ENV_LITERAL[@]}"; do
     args+=(-e "${kv}")
   done
-  args+=("${IMAGE}" "${AGENT_BIN}" "${AGENT_ARGS[@]}" "${EXTRA_ARGS[@]}")
+  # `--` ends podman's own option parsing before the image + command, so a
+  # passed-through tool arg that starts with `-` can never be misread as a
+  # podman flag (and mirrors the ch-run path below).
+  args+=(-- "${IMAGE}" "${AGENT_BIN}" "${AGENT_ARGS[@]}" "${EXTRA_ARGS[@]}")
   podman "${args[@]}"
 }
 
@@ -242,9 +237,8 @@ agent::run_charliecloud() {
 # Derive the host timezone (IANA name) and forward it so containers report
 # host-local time instead of UTC. tzdata in agent-base resolves the name. Tried
 # in order: timedatectl, /etc/timezone, the /etc/localtime symlink, then $TZ.
-# If nothing is derivable, TZ is left unset and the container stays UTC (current
-# behaviour). Appended to ENV_LITERAL so both the podman (-e) and ch-run
-# (--set-env) emission loops forward it unchanged.
+# If nothing is derivable, TZ is left unset and the container stays UTC. Appended
+# to ENV_LITERAL so both the podman (-e) and ch-run (--set-env) loops forward it.
 agent::derive_tz() {
   local tz=""
   if command -v timedatectl >/dev/null 2>&1; then
@@ -278,3 +272,85 @@ agent::launch() {
       ;;
   esac
 }
+
+# ---- main: parse container flags, then the tool name, then pass the rest ----
+
+# Defaults
+APP_DIR=$(pwd)
+CONTAINER_TYPE=""
+REBUILD=false
+VOLUMES=()
+RO_VOLUMES=()
+AGENT_ARGS=()   # no flag mapping any more -- tool args pass through verbatim
+
+# getopts stops at the first non-option token (the tool name), so container
+# flags are parsed here and everything from the tool name on is left in "$@".
+while getopts "a:v:t:r:bh" opt; do
+  case ${opt} in
+    a) APP_DIR=$OPTARG ;;
+    v) VOLUMES+=("$OPTARG") ;;
+    r) RO_VOLUMES+=("$OPTARG") ;;
+    t) CONTAINER_TYPE=$OPTARG ;;
+    b) REBUILD=true ;;
+    h|?) usage ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+# First positional is the agent to run; the rest are its own args, verbatim.
+TOOL="${1:-}"
+if [[ -z "${TOOL}" ]]; then
+  echo "Error: no agent specified (expected claude, opencode, or codex)." >&2
+  usage
+fi
+shift
+EXTRA_ARGS=("$@")
+
+# Per-agent container configuration (the only thing that differs between agents).
+case "${TOOL}" in
+  claude)
+    IMAGE="claude-code"
+    CONTAINERFILE="Containerfile.claude-code"
+    AGENT_BIN="/usr/local/bin/claude"
+    CONFIG_MOUNTS=(
+      "${HOME}/.claude/:/root/.claude/"
+      "${HOME}/.claude.json:/root/.claude.json"
+    )
+    # Forward these host env vars only when set, so empty values don't shadow the
+    # mounted ~/.claude.json.
+    ENV_FORWARD=(ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_AUTH_TOKEN)
+    ENV_LITERAL=(CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1)
+    ;;
+  opencode)
+    IMAGE="opencode"
+    CONTAINERFILE="Containerfile.opencode"
+    AGENT_BIN="/usr/local/bin/opencode"
+    CONFIG_MOUNTS=(
+      "${HOME}/.config/opencode/:/root/.config/opencode/"
+      "${HOME}/.local/share/opencode/:/root/.local/share/opencode/"
+      "${HOME}/.cache/opencode/:/root/.cache/opencode/"
+      "${HOME}/.local/state/opencode/:/root/.local/state/opencode/"
+    )
+    ENV_FORWARD=()
+    ENV_LITERAL=(OPENCODE_ENABLE_EXA=1 OPENCODE_EXPERIMENTAL_LSP_TOOL=true)
+    ;;
+  codex)
+    IMAGE="codex"
+    CONTAINERFILE="Containerfile.codex"
+    AGENT_BIN="/usr/local/bin/codex"
+    CONFIG_MOUNTS=(
+      "${HOME}/.codex/:/root/.codex/"
+    )
+    # Forward an API key only when set, so it doesn't shadow a mounted ~/.codex
+    # login. (The local-model endpoint can't be set via env -- OPENAI_BASE_URL is
+    # ignored by current codex -- it must live in ~/.codex/config.toml.)
+    ENV_FORWARD=(OPENAI_API_KEY CODEX_API_KEY)
+    ENV_LITERAL=()
+    ;;
+  *)
+    echo "Error: unknown agent '${TOOL}' (expected claude, opencode, or codex)." >&2
+    usage
+    ;;
+esac
+
+agent::launch

@@ -1,5 +1,4 @@
-# Resolve `source`d files relative to the sourcing script and follow them, so
-# the bin/ launchers (ccc.sh, occ.sh, cdx.sh) can share bin/lib/agent-run.sh and still
-# lint cleanly with a plain `shellcheck bin/*.sh`.
-source-path=SCRIPTDIR
-external-sources=true
+# agtbox.sh is a single self-contained script (no sourced libraries), so it and
+# test/argv.sh lint cleanly with a plain `shellcheck bin/agtbox.sh test/argv.sh`.
+# No special configuration is needed right now; this file is the place to add
+# shellcheck settings if that changes.
