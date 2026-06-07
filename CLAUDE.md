@@ -11,13 +11,13 @@ Bash launchers + Containerfiles for running AI coding agents (Claude Code, openc
 Agent launchers (`bin/`, runnable from anywhere; default mount target = current dir):
 
 ```bash
-./bin/ccc.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r [ID]] [-f] [-b]
-./bin/occ.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r [ID]] [-f] [-b]   # opencode
-./bin/cdx.sh [-a APP_DIR] [-v VOL] [-t podman|charliecloud] [-c] [-r [ID]] [-f] [-b]   # codex (OpenAI Codex CLI)
+./bin/ccc.sh [-a APP_DIR] [-v VOL] [-r VOL] [-t podman|charliecloud] [-c] [-s [ID]] [-f] [-b]
+./bin/occ.sh [-a APP_DIR] [-v VOL] [-r VOL] [-t podman|charliecloud] [-c] [-s [ID]] [-f] [-b]   # opencode
+./bin/cdx.sh [-a APP_DIR] [-v VOL] [-r VOL] [-t podman|charliecloud] [-c] [-s [ID]] [-f] [-b]   # codex (OpenAI Codex CLI)
 ```
 
 - `-b` forces an image rebuild; `-t` overrides engine auto-detection; `-h` prints full usage.
-- All three launchers share the same flags `-c` / `-r` / `-f` (continue / resume / fork; bare `-r` opens the session picker, `-r ID` resumes by id), mapped to each agent's native form (for codex these become the `resume`/`fork` subcommands). Everything after `--` is passed through to the agent — that's how you reach per-tool options like `--model`, claude's `--effort`, or codex's `-c model_reasoning_effort=…` (each launcher's `-h` lists the common ones).
+- All three launchers share the same flags `-c` / `-s` / `-f` (continue / resume / fork; bare `-s` opens the session picker, `-s ID` resumes by id), mapped to each agent's native form (for codex these become the `resume`/`fork` subcommands). `-r VOL` is the **read-only volume** flag (repeatable; bound at the same host==container path) — under podman it is enforced with `:ro`, under Charliecloud it falls back to a read-write `-b` bind plus a one-time warning (see below). Everything after `--` is passed through to the agent — that's how you reach per-tool options like `--model`, claude's `--effort`, or codex's `-c model_reasoning_effort=…` (each launcher's `-h` lists the common ones).
 
 There is no separate build/lint/test step — agent images build lazily on first launch (or with `-b`).
 
@@ -35,7 +35,7 @@ Adding an agent means a new wrapper + Containerfile; changing engine/build/run b
 
 **Ephemeral by design.** Containers run `--rm`, so anything installed *globally* inside (apt/pip/npm) is discarded next run; persist work in the mounted dir instead — a project `.venv`/`node_modules` survive because `APP_DIR` is bind-mounted at the same path. The pip + npm **download caches** persist across runs via `SHARED_MOUNTS` in `agent-run.sh` (host `~/.cache/podman-ai-agents/{pip,npm}/` → the containers' default cache dirs), so global re-installs are fast even though the packages themselves stay ephemeral. Debian's PEP 668 blocks system/`--user` pip installs, so Python deps go in a project venv.
 
-**Charliecloud vs podman.** Podman runs the tool images directly. Charliecloud builds the same Containerfiles via `ch-image`, converts them to dir format under `agents/.charliecloud/`, and runs them unprivileged with `ch-run --write-fake --private-tmp`. Both paths produce the same mount layout. Two ch-run specifics (untested in the podman-only dev env — verify on HPC): a missing `-b` destination auto-creates as a *directory*, so `Containerfile.claude-code` pre-`touch`es `/root/.claude.json` for that file-bind; and forwarded env values use `--env-no-expand` so colon/`$` values aren't path-expanded.
+**Charliecloud vs podman.** Podman runs the tool images directly. Charliecloud builds the same Containerfiles via `ch-image`, converts them to dir format under `agents/.charliecloud/`, and runs them unprivileged with `ch-run --write-fake --private-tmp`. Both paths produce the same mount layout. Three ch-run specifics (untested in the podman-only dev env — verify on HPC): a missing `-b` destination auto-creates as a *directory*, so `Containerfile.claude-code` pre-`touch`es `/root/.claude.json` for that file-bind; forwarded env values use `--env-no-expand` so colon/`$` values aren't path-expanded; and `ch-run` has no read-only bind option, so `-r VOL` read-only volumes are mounted **read-write** (with a one-time stderr warning) — the read-only guarantee holds only under podman.
 
 **Custom CA certs.** Before building, launchers copy `~/.local/share/certs/*` into `agents/certs/` (gitignored); the base image `COPY`s them in and runs `update-ca-certificates` — needed behind TLS-intercepting proxies. Missing certs are silently skipped.
 

@@ -16,14 +16,15 @@ RESUME=false
 SESSION=""
 FORK=false
 VOLUMES=()
+RO_VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r [ID]] [-f] [-b] [-h] [-- ARGS...]"
+  echo "Usage: ${0} [-a DIR] [-v VOL] [-r VOL] [-t TYPE] [-c] [-s [ID]] [-f] [-b] [-h] [-- ARGS...]"
   agent::usage_container
   echo "  Codex session (mapped to resume/fork subcommands):"
   echo "    -c       Resume the most recent session (resume --last)"
-  echo "    -r [ID]  Resume session ID, or open the picker if no ID"
-  echo "    -f       Fork instead of resume (with -c/-r, or alone for the picker)"
+  echo "    -s [ID]  Resume session ID, or open the picker if no ID"
+  echo "    -f       Fork instead of resume (with -c/-s, or alone for the picker)"
   echo "  Pass-through after -- (common codex flags):"
   echo "    -m MODEL    -c model_reasoning_effort=high   (codex's own -c = config)"
   echo "    --oss --local-provider lmstudio  --sandbox workspace-write"
@@ -32,13 +33,14 @@ usage() {
   exit 1
 }
 
-while getopts "a:v:t:crfbh" opt; do
+while getopts "a:v:t:r:csfbh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
+    r) RO_VOLUMES+=("$OPTARG") ;;
     t) CONTAINER_TYPE=$OPTARG ;;
     c) CONTINUE=true ;;
-    r) RESUME=true ;;
+    s) RESUME=true ;;
     f) FORK=true ;;
     b) REBUILD=true ;;
     h|?) usage ;;
@@ -47,9 +49,9 @@ done
 
 # Pass-through: everything after `--` is forwarded to the agent verbatim.
 shift $((OPTIND - 1))
-# -r takes an OPTIONAL session id: grab the first leftover token unless it
-# looks like an option, so bare -r opens the picker. Done after getopts so
-# it works regardless of where -r sits in a combined cluster (e.g. -rc ID).
+# -s takes an OPTIONAL session id: grab the first leftover token unless it
+# looks like an option, so bare -s opens the picker. Done after getopts so
+# it works regardless of where -s sits in a combined cluster (e.g. -sc ID).
 if [[ "${RESUME}" == "true" && -z "${SESSION}" && $# -gt 0 && "$1" != -* ]]; then
   SESSION="$1"
   shift
@@ -59,7 +61,7 @@ EXTRA_ARGS=("$@")
 # Build codex arguments. codex uses SUBCOMMANDS (resume / fork), not flags, and
 # the session id is positional, so the subcommand tokens come first. The session
 # "target" is shared by resume and fork:
-#   -r ID -> ID    |    -c -> --last (most recent)    |    -r (bare) -> picker
+#   -s ID -> ID    |    -c -> --last (most recent)    |    -s (bare) -> picker
 AGENT_ARGS=()
 target=()
 if [[ -n "${SESSION}" ]]; then

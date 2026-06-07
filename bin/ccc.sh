@@ -16,14 +16,15 @@ RESUME=false
 SESSION=""
 FORK=false
 VOLUMES=()
+RO_VOLUMES=()
 
 usage() {
-  echo "Usage: ${0} [-a DIR] [-v VOL] [-t TYPE] [-c] [-r [ID]] [-f] [-b] [-h] [-- ARGS...]"
+  echo "Usage: ${0} [-a DIR] [-v VOL] [-r VOL] [-t TYPE] [-c] [-s [ID]] [-f] [-b] [-h] [-- ARGS...]"
   agent::usage_container
   echo "  Claude Code session:"
   echo "    -c       Continue the most recent session"
-  echo "    -r [ID]  Resume session ID, or open the interactive picker if no ID"
-  echo "    -f       Fork instead of resume (use with -r or -c)"
+  echo "    -s [ID]  Resume session ID, or open the interactive picker if no ID"
+  echo "    -f       Fork instead of resume (use with -s or -c)"
   echo "  Pass-through after -- (common claude flags):"
   echo "    --model sonnet|opus|<name>    --effort low|medium|high|xhigh|max"
   echo "    -p (print/non-interactive)    --permission-mode plan|acceptEdits|..."
@@ -32,13 +33,14 @@ usage() {
   exit 1
 }
 
-while getopts "a:v:t:crfbh" opt; do
+while getopts "a:v:t:r:csfbh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
+    r) RO_VOLUMES+=("$OPTARG") ;;
     t) CONTAINER_TYPE=$OPTARG ;;
     c) CONTINUE=true ;;
-    r) RESUME=true ;;
+    s) RESUME=true ;;
     f) FORK=true ;;
     b) REBUILD=true ;;
     h|?) usage ;;
@@ -47,9 +49,9 @@ done
 
 # Pass-through: everything after `--` is forwarded to the agent verbatim.
 shift $((OPTIND - 1))
-# -r takes an OPTIONAL session id: grab the first leftover token unless it
-# looks like an option, so bare -r opens the picker. Done after getopts so
-# it works regardless of where -r sits in a combined cluster (e.g. -rc ID).
+# -s takes an OPTIONAL session id: grab the first leftover token unless it
+# looks like an option, so bare -s opens the picker. Done after getopts so
+# it works regardless of where -s sits in a combined cluster (e.g. -sc ID).
 if [[ "${RESUME}" == "true" && -z "${SESSION}" && $# -gt 0 && "$1" != -* ]]; then
   SESSION="$1"
   shift
