@@ -23,7 +23,7 @@ There is no separate build/lint/test step — agent images build lazily on first
 
 ## Architecture
 
-**Two-stage image hierarchy.** `agents/Containerfile.base` builds `agent-base` (node:trixie + ansible/git/python/C toolchain/rust + host CA certs). Each agent image (`Containerfile.claude-code`, `.opencode`, `.codex`) is `FROM agent-base` and only installs its own tool. Editing the base affects all of them.
+**Two-stage image hierarchy.** `agents/Containerfile.base` builds `agent-base` (node:trixie + ansible, git, bubblewrap, a Python — `venv`/`pip`/`pipx` — + C/C++ + Rust build toolchain, common CLI tools — ripgrep, jq, less, sqlite3, tree, fd-find, rsync, zip, shellcheck — and host CA certs). Each agent image (`Containerfile.claude-code`, `.opencode`, `.codex`) is `FROM agent-base` and only installs its own tool. Editing the base affects all of them.
 
 **Launcher pattern — `bin/lib/agent-run.sh` + thin wrappers.** `ccc.sh`, `occ.sh`, and `cdx.sh` source the shared lib, declare only what differs (image, Containerfile, config mounts, env vars, agent binary, flag→arg mapping), then call `agent::launch`. The lib:
 1. Auto-detects the engine — prefers Charliecloud (`ch-run`) if present, else podman; `-t` overrides.
