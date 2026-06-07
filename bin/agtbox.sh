@@ -208,8 +208,9 @@ agent::run_charliecloud() {
 # Add timezone to env so container knows the time
 agent::derive_tz() {
   local tz=""
-  tz=$(readlink -f /etc/localtime 2>/dev/null | sed -n 's#.*/zoneinfo/##p')
+  tz=$(readlink -f /etc/localtime 2>/dev/null | sed -n 's#.*/zoneinfo/##p') || true
   [[ -n "${tz}" ]] && ENV_LITERAL+=("TZ=${tz}")
+  return 0
 }
 
 # Detect engine, derive TZ, normalise paths, ensure config, build, run.
