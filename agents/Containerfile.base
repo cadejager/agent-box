@@ -5,7 +5,7 @@ FROM node:trixie
 # toolchain is inherited by every agent image built FROM agent-base.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ansible curl git python3 pip gcc g++ gdb valgrind cmake rust-all \
+      ansible bubblewrap curl git python3 pip gcc g++ gdb valgrind cmake rust-all \
  && rm -rf /var/lib/apt/lists/*
 
 # certs
