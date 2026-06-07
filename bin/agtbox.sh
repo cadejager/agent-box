@@ -191,7 +191,7 @@ agent::run_charliecloud() {
       args+=(-b "${mount}:${mount}")
     done
   fi
-  args+=(-v "${HOME}/.config/agent-box/:/root/.config/agent-box/")
+  args+=(-b "${HOME}/.config/agent-box/:/root/.config/agent-box/")
   # --env-no-expand makes ch-run pass the value verbatim (no path/$-expansion).
   for var in "${ENV_FORWARD[@]}"; do
     if [[ -n "${!var:-}" ]]; then
@@ -207,7 +207,8 @@ agent::run_charliecloud() {
 
 # Add timezone to env so container knows the time
 agent::derive_tz() {
-  local tz=$(readlink -f /etc/localtime 2>/dev/null | sed -n 's#.*/zoneinfo/##p')
+  local tz=""
+  tz=$(readlink -f /etc/localtime 2>/dev/null | sed -n 's#.*/zoneinfo/##p')
   [[ -n "${tz}" ]] && ENV_LITERAL+=("TZ=${tz}")
 }
 
