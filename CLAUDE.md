@@ -33,7 +33,7 @@ There is no separate build/lint/test step — agent images build lazily on first
 
 Adding an agent means a new wrapper + Containerfile; changing engine/build/run behavior means editing `bin/lib/agent-run.sh` once.
 
-**Ephemeral by design.** Containers run `--rm`, so anything installed *globally* inside (apt/pip/npm) is discarded next run; persist work in the mounted dir instead — a project `.venv`/`node_modules` survive because `APP_DIR` is bind-mounted at the same path.
+**Ephemeral by design.** Containers run `--rm`, so anything installed *globally* inside (apt/pip/npm) is discarded next run; persist work in the mounted dir instead — a project `.venv`/`node_modules` survive because `APP_DIR` is bind-mounted at the same path. The pip + npm **download caches** persist across runs via `SHARED_MOUNTS` in `agent-run.sh` (host `~/.cache/podman-ai-agents/{pip,npm}/` → the containers' default cache dirs), so global re-installs are fast even though the packages themselves stay ephemeral. Debian's PEP 668 blocks system/`--user` pip installs, so Python deps go in a project venv.
 
 **Charliecloud vs podman.** Podman runs the tool images directly. Charliecloud builds the same Containerfiles via `ch-image`, converts them to dir format under `agents/.charliecloud/`, and runs them unprivileged with `ch-run --write-fake --private-tmp`. Both paths produce the same mount layout. Two ch-run specifics (untested in the podman-only dev env — verify on HPC): a missing `-b` destination auto-creates as a *directory*, so `Containerfile.claude-code` pre-`touch`es `/root/.claude.json` for that file-bind; and forwarded env values use `--env-no-expand` so colon/`$` values aren't path-expanded.
 

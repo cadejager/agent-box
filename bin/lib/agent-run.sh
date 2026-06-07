@@ -23,11 +23,25 @@
 #   ENV_FORWARD    array of host env var names to forward when set and non-empty (may be empty)
 #   ENV_LITERAL    array of "VAR=VALUE" always set in the container (may be empty)
 #
+# The lib itself also sets SHARED_MOUNTS -- engine-agnostic bind mounts applied to
+# every agent (currently the pip + npm download caches; see its definition below).
+#
 # Those wrapper-provided globals are referenced here without local assignment:
 # shellcheck disable=SC2154
 
 # Repo root, derived from this file's location (bin/lib/agent-run.sh).
 PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/../.." &> /dev/null && pwd )
+
+# Engine-agnostic mounts shared by every agent: persist the pip + npm download
+# caches across the ephemeral --rm container so re-installs are fast. These bind
+# the DEFAULT cache paths, so no env vars are needed -- the tools just find a warm
+# cache. The host root lives outside the repo (no .gitignore entry needed) and is
+# safe to delete to reclaim space. Sources end in "/" so agent::ensure_config_sources
+# auto-creates them.
+SHARED_MOUNTS=(
+  "${HOME}/.cache/podman-ai-agents/pip/:/root/.cache/pip/"
+  "${HOME}/.cache/podman-ai-agents/npm/:/root/.npm/"
+)
 
 # Shared "Container args" section for the launchers' -h output. Each wrapper
 # calls this, then prints its own tool-specific session + pass-through lines.
@@ -69,7 +83,7 @@ agent::normalize_paths() {
 # a fresh user who has never run the host-native tool still launch.
 agent::ensure_config_sources() {
   local mount host
-  for mount in "${CONFIG_MOUNTS[@]}"; do
+  for mount in "${CONFIG_MOUNTS[@]}" "${SHARED_MOUNTS[@]}"; do
     host="${mount%%:*}"
     if [[ "${host}" == */ ]]; then
       mkdir -p "${host}"
@@ -145,6 +159,9 @@ agent::run_podman() {
   for mount in "${CONFIG_MOUNTS[@]}"; do
     args+=(-v "${mount}")
   done
+  for mount in "${SHARED_MOUNTS[@]}"; do
+    args+=(-v "${mount}")
+  done
   for var in "${ENV_FORWARD[@]}"; do
     if [[ -n "${!var:-}" ]]; then
       args+=(-e "${var}=${!var}")
@@ -165,6 +182,9 @@ agent::run_charliecloud() {
     args+=(-b "${mount}:${mount}")
   done
   for mount in "${CONFIG_MOUNTS[@]}"; do
+    args+=(-b "${mount}")
+  done
+  for mount in "${SHARED_MOUNTS[@]}"; do
     args+=(-b "${mount}")
   done
   # --env-no-expand makes ch-run pass the value verbatim; without it ch-run does
