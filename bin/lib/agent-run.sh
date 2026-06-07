@@ -12,6 +12,9 @@
 # Variables the wrapper must set before calling agent::launch:
 #   APP_DIR        host dir mounted at the same path inside the container
 #   VOLUMES        array of extra host paths to bind at the same path
+#   RO_VOLUMES     array of extra host paths to bind READ-ONLY at the same path
+#                  (podman enforces :ro; charliecloud has no ro bind, so it mounts
+#                  these read-write and warns; may be empty)
 #   CONTAINER_TYPE "podman" | "charliecloud" | "" to auto-detect
 #   REBUILD        "true" to rebuild images first
 #   IMAGE          image/tag name (e.g. claude-code)
@@ -49,6 +52,7 @@ agent::usage_container() {
   echo "  Container args:"
   echo "    -a DIR   App directory, mounted at the same path inside (default: cwd)"
   echo "    -v VOL   Extra volume, mounted at the same path inside (repeatable)"
+  echo "    -r VOL   Extra volume, mounted READ-ONLY at the same path (repeatable; podman only -- charliecloud mounts rw)"
   echo "    -t TYPE  Engine: podman or charliecloud (default: auto-detect)"
   echo "    -b       Rebuild images"
 }
@@ -71,10 +75,32 @@ agent::detect_engine() {
 # Resolve APP_DIR and every extra volume to an absolute path.
 agent::normalize_paths() {
   APP_DIR=$(realpath "${APP_DIR}")
-  local i
+  local i j
   for i in "${!VOLUMES[@]}"; do
     VOLUMES[i]=$(realpath "${VOLUMES[i]}")
   done
+  for i in "${!RO_VOLUMES[@]}"; do
+    RO_VOLUMES[i]=$(realpath "${RO_VOLUMES[i]}")
+  done
+  # Guard: a path given as BOTH -v (rw) and -r (ro) would be a duplicate
+  # mount target and podman would reject the run. Read-write wins -- drop the
+  # path from RO_VOLUMES and warn.
+  local kept=()
+  for i in "${!RO_VOLUMES[@]}"; do
+    local dup=false
+    for j in "${!VOLUMES[@]}"; do
+      if [[ "${RO_VOLUMES[i]}" == "${VOLUMES[j]}" ]]; then
+        dup=true
+        break
+      fi
+    done
+    if [[ "${dup}" == "true" ]]; then
+      echo "Warning: ${RO_VOLUMES[i]} given as both -v (rw) and -r (ro); mounting read-write." >&2
+    else
+      kept+=("${RO_VOLUMES[i]}")
+    fi
+  done
+  RO_VOLUMES=("${kept[@]}")
 }
 
 # Make sure each CONFIG_MOUNTS host source exists before it is bind-mounted --
@@ -156,6 +182,9 @@ agent::run_podman() {
   for mount in "${VOLUMES[@]}"; do
     args+=(-v "${mount}:${mount}")
   done
+  for mount in "${RO_VOLUMES[@]}"; do
+    args+=(-v "${mount}:${mount}:ro")
+  done
   for mount in "${CONFIG_MOUNTS[@]}"; do
     args+=(-v "${mount}")
   done
@@ -181,6 +210,15 @@ agent::run_charliecloud() {
   for mount in "${VOLUMES[@]}"; do
     args+=(-b "${mount}:${mount}")
   done
+  # ch-run has NO read-only bind option, so RO_VOLUMES are mounted READ-WRITE
+  # here. Warn once (listing the paths) so the caller knows the -r guarantee is
+  # not enforced under Charliecloud.
+  if [[ ${#RO_VOLUMES[@]} -gt 0 ]]; then
+    echo "Warning: Charliecloud cannot enforce read-only binds; mounting read-write: ${RO_VOLUMES[*]}" >&2
+    for mount in "${RO_VOLUMES[@]}"; do
+      args+=(-b "${mount}:${mount}")
+    done
+  fi
   for mount in "${CONFIG_MOUNTS[@]}"; do
     args+=(-b "${mount}")
   done

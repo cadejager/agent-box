@@ -38,9 +38,10 @@ All three launchers take the same flags:
 |------|---------|
 | `-a DIR` | App directory to mount (default: current dir), at the same path inside the container |
 | `-v VOL` | Extra volume to mount at the same path (repeatable) |
+| `-r VOL` | Extra volume mounted **read-only** at the same path (repeatable). podman enforces it; Charliecloud has no read-only bind, so it mounts read-write and warns |
 | `-t TYPE` | Engine: `podman` or `charliecloud` (default: auto-detect) |
 | `-c` | Continue the most recent session |
-| `-r [ID]` | Resume session `ID`; with no ID, open the agent's interactive session picker |
+| `-s [ID]` | Resume session `ID`; with no ID, open the agent's interactive session picker |
 | `-f` | Fork instead of resume |
 | `-b` | Rebuild the images |
 | `-h` | Show help (incl. a per-tool pass-through cheat-sheet) |
@@ -50,10 +51,11 @@ The unified flags map to each tool's native form (claude `--resume`, opencode `-
 
 ```bash
 ./bin/ccc.sh -a ~/src/myproject                 # run against a specific directory
-./bin/ccc.sh -r                                 # resume — pick a session interactively
-./bin/cdx.sh -r 0f3c1a…                          # resume a specific codex session
+./bin/ccc.sh -s                                 # resume — pick a session interactively
+./bin/cdx.sh -s 0f3c1a…                          # resume a specific codex session
 ./bin/ccc.sh -- --model opus --effort high      # pass raw flags through to claude
 ./bin/occ.sh -v ~/datasets                      # mount an extra directory
+./bin/occ.sh -r ~/reference-data                # mount an extra directory read-only
 ./bin/cdx.sh -b                                 # rebuild this agent's images
 ```
 
