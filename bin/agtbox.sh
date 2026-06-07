@@ -20,16 +20,6 @@ PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
 IMAGE="agent-box"
 CONTAINERFILE="Containerfile"
 
-# ONE bind mount does it all. Every tool's config AND the pip/npm download caches
-# live under one host dir, ~/.config/agent-box, mounted to the same path inside.
-# The image symlinks each tool's expected path -- ~/.claude, ~/.claude.json,
-# ~/.codex, opencode's XDG dirs, ~/.cache/pip, ~/.npm -- INTO it, so the launcher
-# needs exactly one mount and zero per-tool knowledge. container/config-layout.sh
-# is the single source of truth for that whole layout (and creates this host dir).
-CONFIG_MOUNTS=(
-  "${HOME}/.config/agent-box/:/root/.config/agent-box/"
-)
-
 # Every tool's env, always exported (a tool ignores env it doesn't read), so the
 # launcher needs no per-tool env logic. Forwarded only when set (so empty values
 # don't shadow mounted config); literals always set. derive_tz appends TZ.
@@ -58,10 +48,9 @@ usage() {
   echo "    -b       Rebuild the image"
   echo "    -h       Show this help"
   echo
-  echo "  Native session flags (typed after the tool name -- no remapping):"
-  echo "    claude     --continue | --resume [ID] | --fork-session"
-  echo "    opencode   --continue | --session ID  | --fork"
-  echo "    codex      resume [ID] | fork [ID]"
+  echo "  Native tool flags (typed after the tool name):"
+  echo "     claude|opencode|codex"
+  echo "       -h    Show tool help"
   exit 1
 }
 
@@ -172,9 +161,7 @@ agent::run_podman() {
   for mount in "${RO_VOLUMES[@]}"; do
     args+=(-v "${mount}:${mount}:ro")
   done
-  for mount in "${CONFIG_MOUNTS[@]}"; do
-    args+=(-v "${mount}")
-  done
+  args+=(-v "${HOME}/.config/agent-box/:/root/.config/agent-box/")
   for var in "${ENV_FORWARD[@]}"; do
     if [[ -n "${!var:-}" ]]; then
       args+=(-e "${var}=${!var}")
@@ -204,9 +191,7 @@ agent::run_charliecloud() {
       args+=(-b "${mount}:${mount}")
     done
   fi
-  for mount in "${CONFIG_MOUNTS[@]}"; do
-    args+=(-b "${mount}")
-  done
+  args+=(-v "${HOME}/.config/agent-box/:/root/.config/agent-box/")
   # --env-no-expand makes ch-run pass the value verbatim (no path/$-expansion).
   for var in "${ENV_FORWARD[@]}"; do
     if [[ -n "${!var:-}" ]]; then
@@ -220,18 +205,9 @@ agent::run_charliecloud() {
   ch-run "${args[@]}"
 }
 
-# Derive the host timezone (IANA name) and forward it so containers report
-# host-local time instead of UTC. tzdata in agent-box resolves the name. Tried:
-# timedatectl, /etc/timezone, /etc/localtime symlink, then $TZ. Underivable =>
-# unset, container stays UTC. Appended to ENV_LITERAL for both engines.
+# Add timezone to env so container knows the time
 agent::derive_tz() {
-  local tz=""
-  if command -v timedatectl >/dev/null 2>&1; then
-    tz=$(timedatectl show -p Timezone --value 2>/dev/null)
-  fi
-  [[ -z "${tz}" && -r /etc/timezone ]] && tz=$(cat /etc/timezone 2>/dev/null)
-  [[ -z "${tz}" ]] && tz=$(readlink -f /etc/localtime 2>/dev/null | sed -n 's#.*/zoneinfo/##p')
-  [[ -z "${tz}" ]] && tz="${TZ:-}"
+  local tz=$(readlink -f /etc/localtime 2>/dev/null | sed -n 's#.*/zoneinfo/##p')
   [[ -n "${tz}" ]] && ENV_LITERAL+=("TZ=${tz}")
 }
 
