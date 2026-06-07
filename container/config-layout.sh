@@ -32,7 +32,7 @@ mode=${2:-}
 dirs=(
   "claude|${HOME}/.claude"
   "codex|${HOME}/.codex"
-  "opencode/config|${HOME}/.config/opencode"
+  "opencode|${HOME}/.config/opencode"
   "opencode/share|${HOME}/.local/share/opencode"
   "opencode/state|${HOME}/.local/state/opencode"
   "opencode/cache|${HOME}/.cache/opencode"
