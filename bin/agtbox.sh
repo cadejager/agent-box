@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 #
-# agtbox.sh -- run an AI coding agent inside a rootless container.
+# agtbox.sh -- run an AI coding agent inside a rootless container (Agent Box).
 #
 #   agtbox.sh [-a DIR] [-v VOL] [-r VOL] [-t podman|charliecloud] [-b] [-h] \
 #             claude|opencode|codex [tool args...]
 #
-# One launcher for all three agents. Container flags come BEFORE the tool name;
-# everything AFTER the tool name is passed to the tool VERBATIM -- use the tool's
-# own flags (e.g. `claude --resume ID`, `opencode --session ID`, `codex resume`).
+# One launcher, one image (agent-box) holding all three agents. Container flags
+# come BEFORE the tool name; everything AFTER the tool name is passed to the tool
+# VERBATIM -- use the tool's own flags (e.g. `claude --resume`, `codex resume`).
 # Requires bash >= 4 (arrays, ${!var}).
 
 set -eo pipefail
@@ -16,15 +16,31 @@ set -eo pipefail
 # Repo root, derived from this file's location (bin/agtbox.sh).
 PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
 
-# Engine-agnostic mounts shared by every agent: persist the pip + npm download
-# caches across the ephemeral --rm container so re-installs are fast. These bind
-# the DEFAULT cache paths, so no env vars are needed -- the tools just find a warm
-# cache. The host root lives outside the repo (no .gitignore entry needed) and is
-# safe to delete to reclaim space. Sources end in "/" so ensure_config_sources
-# auto-creates them.
-SHARED_MOUNTS=(
-  "${HOME}/.cache/podman-ai-agents/pip/:/root/.cache/pip/"
-  "${HOME}/.cache/podman-ai-agents/npm/:/root/.npm/"
+# One image for all three agents; built from container/Containerfile.
+IMAGE="agent-box"
+CONTAINERFILE="Containerfile"
+
+# ONE bind mount does it all. Every tool's config AND the pip/npm download caches
+# live under one host dir, ~/.config/agent-box, mounted to the same path inside.
+# The image symlinks each tool's expected path -- ~/.claude, ~/.claude.json,
+# ~/.codex, opencode's XDG dirs, ~/.cache/pip, ~/.npm -- INTO it, so the launcher
+# needs exactly one mount and zero per-tool knowledge. container/config-layout.sh
+# is the single source of truth for that whole layout (and creates this host dir).
+CONFIG_MOUNTS=(
+  "${HOME}/.config/agent-box/:/root/.config/agent-box/"
+)
+
+# Every tool's env, always exported (a tool ignores env it doesn't read), so the
+# launcher needs no per-tool env logic. Forwarded only when set (so empty values
+# don't shadow mounted config); literals always set. derive_tz appends TZ.
+ENV_FORWARD=(
+  ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_AUTH_TOKEN
+  OPENAI_API_KEY CODEX_API_KEY
+)
+ENV_LITERAL=(
+  CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1
+  OPENCODE_ENABLE_EXA=1
+  OPENCODE_EXPERIMENTAL_LSP_TOOL=true
 )
 
 usage() {
@@ -39,7 +55,7 @@ usage() {
   echo "    -v VOL   Extra volume, mounted at the same path inside (repeatable)"
   echo "    -r VOL   Extra volume, mounted READ-ONLY at the same path (repeatable; podman only -- charliecloud mounts rw)"
   echo "    -t TYPE  Engine: podman or charliecloud (default: auto-detect)"
-  echo "    -b       Rebuild images"
+  echo "    -b       Rebuild the image"
   echo "    -h       Show this help"
   echo
   echo "  Native session flags (typed after the tool name -- no remapping):"
@@ -74,9 +90,9 @@ agent::normalize_paths() {
   for i in "${!RO_VOLUMES[@]}"; do
     RO_VOLUMES[i]=$(realpath "${RO_VOLUMES[i]}")
   done
-  # Guard: a path given as BOTH -v (rw) and -r (ro) would be a duplicate
-  # mount target and podman would reject the run. Read-write wins -- drop the
-  # path from RO_VOLUMES and warn.
+  # Guard: a path given as BOTH -v (rw) and -r (ro) would be a duplicate mount
+  # target and podman would reject the run. Read-write wins -- drop it from
+  # RO_VOLUMES and warn.
   local kept=()
   for i in "${!RO_VOLUMES[@]}"; do
     local dup=false
@@ -95,79 +111,58 @@ agent::normalize_paths() {
   RO_VOLUMES=("${kept[@]}")
 }
 
-# Make sure each CONFIG_MOUNTS host source exists before it is bind-mounted --
-# podman and ch-run both refuse a missing bind source. A trailing slash means a
-# directory; otherwise a file (create the parent dir, then touch it). This lets
-# a fresh user who has never run the host-native tool still launch.
+# Create the host side of the consolidated layout so a fresh user can launch.
+# config-layout.sh (the same script baked into the image) creates every target
+# subdir + seed file under ~/.config/agent-box -- the single bind source. Run
+# WITHOUT --symlinks here: on the host we only need the dirs/files to exist (the
+# in-container symlinks are baked into the image). Both engines refuse a missing
+# bind source, and config-layout.sh never clobbers existing config.
 agent::ensure_config_sources() {
-  local mount host
-  for mount in "${CONFIG_MOUNTS[@]}" "${SHARED_MOUNTS[@]}"; do
-    host="${mount%%:*}"
-    if [[ "${host}" == */ ]]; then
-      mkdir -p "${host}"
-    else
-      mkdir -p "$(dirname "${host}")"
-      [[ -e "${host}" ]] || touch "${host}"
-    fi
-  done
+  bash "${PROJ_DIR}/container/config-layout.sh" "${HOME}/.config/agent-box"
 }
 
-# Copy the host CA bundle into agents/certs/ for the image build. These are
-# baked into agent-base (which every agent image inherits) so containers can get
-# through TLS-intercepting corporate proxies. Run from the agents/ directory.
-# Source defaults to ~/.local/share/certs, overridable via AGENT_CERTS_DIR; a
-# missing/empty source is fine (an empty certs/ dir still satisfies the COPY,
-# and update-ca-certificates just adds nothing).
+# Copy the host CA bundle into container/certs/ for the image build. Baked into
+# agent-box so containers get through TLS-intercepting proxies. Source defaults
+# to ~/.local/share/certs, overridable via AGENT_CERTS_DIR; missing/empty is fine.
 agent::refresh_certs() {
   local src="${AGENT_CERTS_DIR:-${HOME}/.local/share/certs}"
-  local dst="${PROJ_DIR}/agents/certs"
+  local dst="${PROJ_DIR}/container/certs"
   rm -rf "${dst}"
   mkdir -p "${dst}"
   cp "${src}"/* "${dst}/" 2>/dev/null || true
 }
 
-# Lazily build agent-base then the agent image with podman.
+# Lazily build the one agent-box image with podman.
 agent::build_podman() {
   if [[ "${REBUILD}" == "true" ]]; then
-    podman image rm agent-base 2>/dev/null || true
     podman image rm "${IMAGE}" 2>/dev/null || true
   fi
-  pushd "${PROJ_DIR}/agents" > /dev/null || exit
-  if ! podman image exists agent-base; then
-    agent::refresh_certs
-    podman build -t agent-base -f Containerfile.base .
-  fi
+  pushd "${PROJ_DIR}/container" > /dev/null || exit
   if ! podman image exists "${IMAGE}"; then
+    agent::refresh_certs
     podman build -t "${IMAGE}" -f "${CONTAINERFILE}" .
   fi
   popd > /dev/null || exit
 }
 
-# Lazily build agent-base then the agent image with Charliecloud, storing the
-# unpacked images under agents/.charliecloud/.
+# Lazily build the one agent-box image with Charliecloud, stored under
+# container/.charliecloud/.
 agent::build_charliecloud() {
   mkdir -p "${CH_STORAGE}"
   if [[ "${REBUILD}" == "true" ]]; then
-    rm -rf "${CH_STORAGE:?}/agent-base"
-    ch-image delete agent-base 2>/dev/null || true
     rm -rf "${CH_STORAGE:?}/${IMAGE:?}"
     ch-image delete "${IMAGE}" 2>/dev/null || true
   fi
-  pushd "${PROJ_DIR}/agents" > /dev/null || exit
-  if [[ ! -d "${CH_STORAGE}/agent-base" ]]; then
-    agent::refresh_certs
-    ch-image build -t agent-base -f Containerfile.base .
-    ch-convert -i ch-image -o dir agent-base "${CH_STORAGE}/agent-base"
-  fi
+  pushd "${PROJ_DIR}/container" > /dev/null || exit
   if [[ ! -d "${CH_STORAGE}/${IMAGE}" ]]; then
+    agent::refresh_certs
     ch-image build -t "${IMAGE}" -f "${CONTAINERFILE}" .
     ch-convert -i ch-image -o dir "${IMAGE}" "${CH_STORAGE}/${IMAGE}"
   fi
   popd > /dev/null || exit
 }
 
-# Build the podman run argv (mounting APP_DIR/volumes/config at the same paths)
-# and exec it. Built as an array -- no eval, no quoting games.
+# Build the podman run argv and exec it. Built as an array -- no eval.
 agent::run_podman() {
   local args=(run -it --rm -v "${APP_DIR}:${APP_DIR}" -w "${APP_DIR}")
   local mount var kv
@@ -180,9 +175,6 @@ agent::run_podman() {
   for mount in "${CONFIG_MOUNTS[@]}"; do
     args+=(-v "${mount}")
   done
-  for mount in "${SHARED_MOUNTS[@]}"; do
-    args+=(-v "${mount}")
-  done
   for var in "${ENV_FORWARD[@]}"; do
     if [[ -n "${!var:-}" ]]; then
       args+=(-e "${var}=${!var}")
@@ -191,9 +183,8 @@ agent::run_podman() {
   for kv in "${ENV_LITERAL[@]}"; do
     args+=(-e "${kv}")
   done
-  # `--` ends podman's own option parsing before the image + command, so a
-  # passed-through tool arg that starts with `-` can never be misread as a
-  # podman flag (and mirrors the ch-run path below).
+  # `--` ends podman's option parsing before the image + command, so a passed-
+  # through tool arg that starts with `-` can't be misread as a podman flag.
   args+=(-- "${IMAGE}" "${AGENT_BIN}" "${EXTRA_ARGS[@]}")
   podman "${args[@]}"
 }
@@ -206,8 +197,7 @@ agent::run_charliecloud() {
     args+=(-b "${mount}:${mount}")
   done
   # ch-run has NO read-only bind option, so RO_VOLUMES are mounted READ-WRITE
-  # here. Warn once (listing the paths) so the caller knows the -r guarantee is
-  # not enforced under Charliecloud.
+  # here. Warn once so the caller knows the -r guarantee isn't enforced under CC.
   if [[ ${#RO_VOLUMES[@]} -gt 0 ]]; then
     echo "Warning: Charliecloud cannot enforce read-only binds; mounting read-write: ${RO_VOLUMES[*]}" >&2
     for mount in "${RO_VOLUMES[@]}"; do
@@ -217,11 +207,7 @@ agent::run_charliecloud() {
   for mount in "${CONFIG_MOUNTS[@]}"; do
     args+=(-b "${mount}")
   done
-  for mount in "${SHARED_MOUNTS[@]}"; do
-    args+=(-b "${mount}")
-  done
-  # --env-no-expand makes ch-run pass the value verbatim; without it ch-run does
-  # search-path/$-expansion on values that podman's -e leaves untouched.
+  # --env-no-expand makes ch-run pass the value verbatim (no path/$-expansion).
   for var in "${ENV_FORWARD[@]}"; do
     if [[ -n "${!var:-}" ]]; then
       args+=(--env-no-expand "--set-env=${var}=${!var}")
@@ -235,10 +221,9 @@ agent::run_charliecloud() {
 }
 
 # Derive the host timezone (IANA name) and forward it so containers report
-# host-local time instead of UTC. tzdata in agent-base resolves the name. Tried
-# in order: timedatectl, /etc/timezone, the /etc/localtime symlink, then $TZ.
-# If nothing is derivable, TZ is left unset and the container stays UTC. Appended
-# to ENV_LITERAL so both the podman (-e) and ch-run (--set-env) loops forward it.
+# host-local time instead of UTC. tzdata in agent-box resolves the name. Tried:
+# timedatectl, /etc/timezone, /etc/localtime symlink, then $TZ. Underivable =>
+# unset, container stays UTC. Appended to ENV_LITERAL for both engines.
 agent::derive_tz() {
   local tz=""
   if command -v timedatectl >/dev/null 2>&1; then
@@ -250,7 +235,7 @@ agent::derive_tz() {
   [[ -n "${tz}" ]] && ENV_LITERAL+=("TZ=${tz}")
 }
 
-# Detect engine, normalise paths, build images, run.
+# Detect engine, derive TZ, normalise paths, ensure config, build, run.
 agent::launch() {
   agent::detect_engine
   agent::derive_tz
@@ -262,7 +247,7 @@ agent::launch() {
       agent::run_podman
       ;;
     charliecloud)
-      CH_STORAGE="${PROJ_DIR}/agents/.charliecloud"
+      CH_STORAGE="${PROJ_DIR}/container/.charliecloud"
       agent::build_charliecloud
       agent::run_charliecloud
       ;;
@@ -305,51 +290,15 @@ fi
 shift
 EXTRA_ARGS=("$@")
 
-# Per-agent container configuration (the only thing that differs between agents).
+# One image serves all three agents; the tool name just selects the binary
+# (binary name == tool name). Config + env are tool-independent (set above).
 case "${TOOL}" in
-  claude)
-    IMAGE="claude-code"
-    CONTAINERFILE="Containerfile.claude-code"
-    AGENT_BIN="/usr/local/bin/claude"
-    CONFIG_MOUNTS=(
-      "${HOME}/.claude/:/root/.claude/"
-      "${HOME}/.claude.json:/root/.claude.json"
-    )
-    # Forward these host env vars only when set, so empty values don't shadow the
-    # mounted ~/.claude.json.
-    ENV_FORWARD=(ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_AUTH_TOKEN)
-    ENV_LITERAL=(CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1)
-    ;;
-  opencode)
-    IMAGE="opencode"
-    CONTAINERFILE="Containerfile.opencode"
-    AGENT_BIN="/usr/local/bin/opencode"
-    CONFIG_MOUNTS=(
-      "${HOME}/.config/opencode/:/root/.config/opencode/"
-      "${HOME}/.local/share/opencode/:/root/.local/share/opencode/"
-      "${HOME}/.cache/opencode/:/root/.cache/opencode/"
-      "${HOME}/.local/state/opencode/:/root/.local/state/opencode/"
-    )
-    ENV_FORWARD=()
-    ENV_LITERAL=(OPENCODE_ENABLE_EXA=1 OPENCODE_EXPERIMENTAL_LSP_TOOL=true)
-    ;;
-  codex)
-    IMAGE="codex"
-    CONTAINERFILE="Containerfile.codex"
-    AGENT_BIN="/usr/local/bin/codex"
-    CONFIG_MOUNTS=(
-      "${HOME}/.codex/:/root/.codex/"
-    )
-    # Forward an API key only when set, so it doesn't shadow a mounted ~/.codex
-    # login. (The local-model endpoint can't be set via env -- OPENAI_BASE_URL is
-    # ignored by current codex -- it must live in ~/.codex/config.toml.)
-    ENV_FORWARD=(OPENAI_API_KEY CODEX_API_KEY)
-    ENV_LITERAL=()
-    ;;
+  claude|opencode|codex) ;;
   *)
     echo "Error: unknown agent '${TOOL}' (expected claude, opencode, or codex)." >&2
     usage
     ;;
 esac
+AGENT_BIN="/usr/local/bin/${TOOL}"
 
 agent::launch
