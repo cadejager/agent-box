@@ -32,6 +32,8 @@ mode=${2:-}
 dirs=(
   "claude|${HOME}/.claude"
   "codex|${HOME}/.codex"
+  "gh|${HOME}/.config/gh"
+  "glab-cli|${HOME}/.config/glab-cli"
   "opencode|${HOME}/.config/opencode"
   "opencode/share|${HOME}/.local/share/opencode"
   "opencode/state|${HOME}/.local/state/opencode"

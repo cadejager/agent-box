@@ -7,9 +7,9 @@ FROM node:trixie
 # packages, drop the apt lists afterward to keep the image smaller).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ansible bubblewrap curl git less rsync \
+      ansible bubblewrap curl wget git less rsync \
       python3 pip python3-venv python3-dev pipx \
-      gcc g++ gdb valgrind cmake rust-all \
+      gcc g++ gdb valgrind \
       ripgrep jq tree fd-find sqlite3 zip shellcheck \
  && rm -rf /var/lib/apt/lists/*
 
@@ -17,17 +17,45 @@ RUN apt-get update \
 COPY certs/ /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
-# Consolidated layout. Run with --symlinks BEFORE the CLI installs so the tools
-# -- and npm itself, for its cache -- write THROUGH the links into
-# ~/.config/agent-box (which the launcher bind-mounts from the host) rather than
-# creating conflicting real dirs. The same script sets up the host side, so the
-# whole layout (config dirs, ~/.claude.json, and the pip/npm caches) is defined
-# in exactly one place.
 COPY config-layout.sh /usr/local/bin/agtbox-config-layout
 RUN chmod +x /usr/local/bin/agtbox-config-layout \
  && /usr/local/bin/agtbox-config-layout /root/.config/agent-box --symlinks
 
 # All three agent CLIs (binary name == tool name; under /usr/local/bin).
 RUN npm install -g @anthropic-ai/claude-code opencode-ai @openai/codex
+
+
+## Install github
+ENV DEBIAN_FRONTEND=noninteractive
+RUN    mkdir -p -m 755 /etc/apt/keyrings \
+	&& out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+	&& cat $out | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+	&& chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+	&& mkdir -p -m 755 /etc/apt/sources.list.d \
+	&& echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+	&& apt update \
+	&& apt install gh -y
+
+# Install gitlab
+ARG GLAB_VERSION=1.102.0
+RUN arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64|arm64) glab_arch="$arch" ;; \
+        *) echo "Unsupported glab architecture: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fL -o /tmp/glab.deb \
+        "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${glab_arch}.deb"; \
+    apt-get install -y --no-install-recommends /tmp/glab.deb; \
+    rm -f /tmp/glab.deb; \
+    \
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/*
+
+# Consolidated layout. Run with --symlinks BEFORE the CLI installs so the tools
+# -- and npm itself, for its cache -- write THROUGH the links into
+# ~/.config/agent-box (which the launcher bind-mounts from the host) rather than
+# creating conflicting real dirs. The same script sets up the host side, so the
+# whole layout (config dirs, ~/.claude.json, and the pip/npm caches) is defined
+# in exactly one place.
 
 WORKDIR /app
