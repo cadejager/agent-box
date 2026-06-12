@@ -1,104 +1,98 @@
 # Agent Box
 
-Run terminal AI coding agents — **Claude Code**, **opencode**, and **OpenAI Codex** — inside one disposable, rootless container, behind one small launcher. Works with **podman** (laptops/workstations) and **Charliecloud** (unprivileged HPC).
+Run terminal AI coding agents — **Claude Code**, **opencode**, and **OpenAI Codex** — inside an unprivileged **[bubblewrap](https://github.com/containers/bubblewrap)** sandbox, behind one small launcher. No container image, no daemon, no root — the agents run against your host's own tools, walled off from the rest of your machine.
 
-There's no application code here — the "source" is one Bash launcher (`agtbox.sh`) plus a single Containerfile.
-
-> The GitHub repo is still named `podman-ai-agents` for now (it'll be renamed to `agent-box` later); the clone command below reflects that.
+There's no application code here — the "source" is a single Bash launcher, `bin/agtbox.sh`.
 
 ## Why
 
-- **Isolation.** The agent runs in an ephemeral (`--rm`) container — the container *is* the security boundary. Anything it installs or breaks is gone next run.
-- **One launcher, one image, no obfuscation.** A single `agtbox.sh` runs any of the three agents from one `agent-box` image, and you pass each tool's *own* flags straight through — nothing new to learn or quote around.
-- **Runs where you do.** Rootless podman locally, Charliecloud on HPC, and behind TLS-intercepting corporate proxies (your CA certs are baked into the image).
-- **Config travels, container doesn't.** All your agent config lives in one host dir (`~/.config/agent-box/`) — a single bind mount — so auth and history persist while the container stays disposable.
+- **Isolation without a container image.** Each agent runs in a fresh bubblewrap sandbox: your real `$HOME` is replaced by an empty tmpfs, the whole filesystem is read-only except a handful of dirs, and the agent can only persist to the project and to `~/.{config,cache,local/share}/agent-box`. A prompt-injected agent can't read your dotfiles/keys or scribble on your system.
+- **Uses what you already have.** System packages (python, git, ripgrep, gcc, …) come straight from your host. Only the bits that aren't system-wide — node, `uv`, and the three agent CLIs — are installed into a per-user toolchain on first run. No multi-GB image to build or store.
+- **One launcher, no obfuscation.** A single `agtbox.sh` runs any of the three agents and passes each tool's *own* flags straight through — nothing new to learn or quote around.
+- **Config and tools persist; the sandbox doesn't.** Your agent config lives in `~/.config/agent-box`, the toolchain + anything an agent installs globally lives in `~/.local/share/agent-box`, and download caches in `~/.cache/agent-box` — all bound in, so logins, history, and installed tools survive while each run starts from a clean sandbox.
 
 ## Requirements
 
-- **podman** (rootless) — or **Charliecloud** (`ch-run`) on HPC. The launcher auto-detects the engine; `-t` overrides.
-- **bash ≥ 4** for the launcher itself. Nothing else to install — local-model *serving* is out of scope (run e.g. [LM Studio](https://lmstudio.ai) separately and point an agent at it; see below).
-- The host config dir `~/.config/agent-box/` is created automatically on first run.
+- **bubblewrap** (`bwrap`) and **unprivileged user namespaces** (the default on most modern Linux; works without root or setuid). On Debian/Ubuntu: `apt install bubblewrap`.
+- **bash ≥ 4**, plus the host tools the agents lean on (`python3`, `git`, `curl`, `tar` are used during setup; `ripgrep`/`jq`/compilers as your projects need them).
+- Everything else — node, `uv`, and the agent CLIs — is **installed automatically on first run** into `~/.local/share/agent-box`. Local-model *serving* is out of scope (run e.g. [LM Studio](https://lmstudio.ai) separately and point an agent at it; see below).
 
 ## Quick start
 
 ```bash
-git clone https://github.com/cadejager/podman-ai-agents
-cd podman-ai-agents
+git clone https://github.com/cadejager/agent-box
+cd agent-box
 
 ./bin/agtbox.sh claude        # Claude Code in the current directory
 ./bin/agtbox.sh opencode      # opencode
 ./bin/agtbox.sh codex         # OpenAI Codex
 ```
 
-The first launch builds the one image (a few minutes — a Node base, a build toolchain, and all three CLIs); later launches are instant. Your current directory is mounted into the container **at the same absolute path**, so any file path the agent prints is valid on your host. `bin/agtbox.sh` can be run from anywhere.
+The **first** launch installs the toolchain (node + `uv` + the three CLIs) into `~/.local/share/agent-box` — a one-time download, done inside a sandbox so the installers can't touch your host. Later launches start instantly. Your current directory is bound into the sandbox **at the same absolute path**, so any path the agent prints is valid on your host. `bin/agtbox.sh` can be run from anywhere.
 
 ## Usage
 
 ```
-agtbox.sh [container flags] <claude|opencode|codex> [tool args…]
+agtbox.sh [flags] <claude|opencode|codex> [tool args…]
 ```
 
-Container flags come **before** the tool name; **everything after the tool name is passed to the agent verbatim** — use the tool's own flags. Run `agtbox.sh <tool> --help` for a given tool's own help.
+Flags come **before** the tool name; **everything after the tool name is passed to the agent verbatim** — use the tool's own flags. Run `agtbox.sh <tool> --help` for a given tool's own help.
 
-| Container flag | Meaning |
+| Flag | Meaning |
 |------|---------|
-| `-a DIR` | App directory to mount (default: current dir), at the same path inside the container |
-| `-v VOL` | Extra volume to mount at the same path (repeatable) |
-| `-r VOL` | Extra volume mounted **read-only** at the same path (repeatable). podman enforces it; Charliecloud has no read-only bind, so it mounts read-write and warns |
-| `-t TYPE` | Engine: `podman` or `charliecloud` (default: auto-detect) |
-| `-b` | Rebuild the image |
-| `-h` | Show help (incl. a per-tool session cheat-sheet) |
+| `-a DIR` | Project directory, bound at the same path inside (default: current dir) |
+| `-v VOL` | Extra dir, bound **read-write** at the same path (repeatable) |
+| `-r VOL` | Extra dir, bound **read-only** at the same path (repeatable) |
+| `-h` | Show help |
 
 ```bash
 ./bin/agtbox.sh -a ~/src/myproject claude          # run against a specific directory
 ./bin/agtbox.sh claude --resume                    # resume — pick a claude session interactively
 ./bin/agtbox.sh codex resume 0f3c1a…               # resume a specific codex session
 ./bin/agtbox.sh claude --model opus --effort high  # the tool's own flags, straight through
-./bin/agtbox.sh -v ~/datasets opencode             # mount an extra directory (read-write)
-./bin/agtbox.sh -r ~/reference-data opencode       # mount an extra directory read-only
-./bin/agtbox.sh -b codex                           # rebuild the image
+./bin/agtbox.sh -v ~/datasets opencode             # bind an extra directory (read-write)
+./bin/agtbox.sh -r ~/reference-data opencode       # bind an extra directory read-only
 ```
 
 Session handling is just each tool's native syntax: claude `--continue` / `--resume [ID]` / `--fork-session`; opencode `--continue` / `--session ID` / `--fork`; codex `resume [ID]` / `fork [ID]`.
 
+`AGTBOX_REINSTALL=1 ./bin/agtbox.sh claude` reinstalls the toolchain (or just `rm -rf ~/.local/share/agent-box` and relaunch).
+
 ## How it works
 
-- **One image.** `container/Containerfile` builds `agent-box` (Node + a build toolchain + common CLI tools + your CA certs + all three agent CLIs). Built lazily on first launch, or on demand with `-b`.
-- **One self-contained launcher.** `bin/agtbox.sh` handles engine detection, the lazy image build, and constructing the run command (as an argv array — no `eval`). The tool name just selects the binary (`/usr/local/bin/<tool>`); image, env, and config mounts are the same for every agent.
-- **Same-path mounts.** Your working dir and any `-v` / `-r` volumes mount at the identical absolute path inside the container, keeping file paths valid on both sides.
-- **Consolidated config — one mount.** Every tool's config *and* the pip/npm caches live under one host dir, `~/.config/agent-box/` — the launcher's **only** bind mount. Inside the image, symlinks point each tool's expected path (`~/.claude`, `~/.claude.json`, `~/.codex`, opencode's XDG dirs, `~/.cache/pip`, `~/.npm`) into it (see `container/config-layout.sh`, the single source of truth for the layout). One dir to back up or wipe.
-- **Disposable container, persistent config.** The container runs `--rm`; your config persists via that mount. Anything installed *globally* inside (apt/pip/npm) does **not** survive — keep project deps in the project (a `.venv`, `node_modules`, …; a `.venv` is also how to `pip install` on the Debian image, which blocks system-wide installs). The pip/npm **download caches** ride that same mount (under `~/.config/agent-box/cache/`), so global re-installs are fast (and that `cache/` subdir is safe to delete).
-- **Host-local time.** The launcher derives your host timezone and forwards it (`TZ`), so the agent's clock matches the host instead of defaulting to UTC.
+- **One self-contained launcher.** `bin/agtbox.sh` constructs a `bwrap …` command (as an argv array — no `eval`) and execs it. The tool name only selects the binary; the sandbox, env, and config wiring are identical for every agent.
+- **Locked-down sandbox.** `/usr`, `/bin`, `/lib`, `/etc`, … are bound **read-only**; `$HOME` and `/tmp` are fresh tmpfs; networking is shared (the agents reach their APIs); and only these are writable, each bound at its real path: your **project**, `~/.config/agent-box`, `~/.cache/agent-box`, `~/.local/share/agent-box`. Nothing else on the host is even visible.
+- **Persistent toolchain + global installs.** `~/.local/share/agent-box` holds node, `uv`, the CLIs, and anything an agent installs globally (`npm -g`, `pip`, `uv tool` — outside a venv). It persists across runs and is shared between tools, so installs stick around and the CLIs can auto-update. Project dependencies still belong in the project (a `.venv`, `node_modules`, …).
+- **Config, wired straight in.** Each tool's config is bound from `~/.config/agent-box/<tool>` onto the path the tool expects (`~/.claude`, `~/.codex`, opencode's XDG dirs, `~/.claude.json`) — direct binds, no symlinks. One dir to back up or wipe.
+- **Download caches** (npm/pip/uv) live in `~/.cache/agent-box` and persist, so re-installs are fast.
+- **Host-local time.** The launcher derives your host timezone and sets `TZ` so the agent's clock matches the host.
 
 ## Pointing an agent at a local model
 
-Serve the model yourself (e.g. LM Studio), then (these env vars are forwarded into the container when set):
+Serve the model yourself (e.g. LM Studio), then (these env vars are forwarded into the sandbox when set):
 
 - **Claude Code** — export `ANTHROPIC_BASE_URL` (and optionally `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_DEFAULT_SONNET_MODEL`).
 - **Codex** — set the endpoint in `~/.config/agent-box/codex/config.toml` (codex ignores `OPENAI_BASE_URL`), or `./bin/agtbox.sh codex --oss --local-provider lmstudio`.
 
 ## Corporate CA certs
 
-Put your company CA certs in `~/.local/share/certs/` (override the source with `AGENT_CERTS_DIR`). The launcher copies them into the image build and runs `update-ca-certificates`, so the agents work behind TLS-intercepting proxies. Certs are baked at build time — after rotating them, rebuild with `-b`.
+The sandbox binds your host's `/etc` read-only, so it inherits the **system trust store** automatically. Behind a TLS-intercepting proxy, install your CA into the host once (`/usr/local/share/ca-certificates/your-ca.crt` then `sudo update-ca-certificates`) and the agents will trust it — nothing to rebuild.
 
 ## Layout
 
 ```
 bin/
-  agtbox.sh               # the single launcher (engine-detect / build / run)
-container/
-  Containerfile           # the one agent-box image (toolchain + 3 CLIs + config symlinks)
-  config-layout.sh        # consolidated-config layout, shared by the image build + launcher
+  agtbox.sh               # the single launcher (sandbox construction + first-run install)
 test/
-  argv.sh                 # stub-engine argv tests for agtbox.sh
+  argv.sh                 # stub-bwrap argv tests for agtbox.sh
 CLAUDE.md                 # terse architecture reference (for AI assistants)
 ```
 
 ## Notes & caveats
 
-- **Charliecloud is implemented but verify on your own HPC host** — the primary dev environment is podman-only.
-- The container runs as **root**, mounts your working tree read-write, and mounts your whole `~/.config/agent-box/` (all three tools' config, incl. credentials) on every run — intentional (the container is the trust boundary). Don't point the launcher at code or images you don't trust.
-- **Upgrading from the old per-tool launchers?** Reclaim the now-unused images/caches: `podman image rm agent-base claude-code opencode codex` and `rm -rf ~/.cache/podman-ai-agents ~/.cache/agent-box` (caches now live under `~/.config/agent-box/cache/`). Agent config now lives in `~/.config/agent-box/` (first run starts fresh / re-login).
+- **The agent can persist only to four places:** the project, `~/.config/agent-box`, `~/.cache/agent-box`, `~/.local/share/agent-box`. Everything else is read-only or an ephemeral tmpfs. Global installs persist (and are shared between runs) by design.
+- **Concurrent runs share** the config/cache/toolchain dirs (so tools see each other's installs); simultaneous installs of the same package could race.
+- **Coming from the old podman/Charliecloud image?** Reclaim it: `podman image rm agent-box` and `rm -rf ~/.cache/podman-ai-agents`. Config in `~/.config/agent-box` carries over.
 - See [`CLAUDE.md`](CLAUDE.md) for the architecture-level reference.
 
 ## License

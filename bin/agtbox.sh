@@ -1,28 +1,43 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 #
-# agtbox.sh -- run an AI coding agent inside a rootless container (Agent Box).
+# agtbox.sh -- run an AI coding agent (claude, opencode, codex) inside an
+# unprivileged bubblewrap sandbox. No container image, no engine: the agents run
+# against the host's system packages plus a small per-user toolchain that is
+# auto-installed on first use.
 #
-#   agtbox.sh [-a DIR] [-v VOL] [-r VOL] [-t podman|charliecloud] [-b] [-h] \
-#             claude|opencode|codex [tool args...]
+#   agtbox.sh [-a DIR] [-v VOL] [-r VOL] [-h] claude|opencode|codex [tool args...]
 #
-# One launcher, one image (agent-box) holding all three agents. Container flags
-# come BEFORE the tool name; everything AFTER the tool name is passed to the tool
-# VERBATIM -- use the tool's own flags (e.g. `claude --resume`, `codex resume`).
-# Requires bash >= 4 (arrays, ${!var}).
+# Flags come BEFORE the tool name; everything AFTER it is passed to the tool
+# VERBATIM (use the tool's own flags, e.g. `claude --resume`, `codex resume`).
+# Requires bash >= 4 and bwrap (bubblewrap).
 
 set -eo pipefail
 
-# Repo root, derived from this file's location (bin/agtbox.sh).
-PROJ_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/.." &> /dev/null && pwd )
+# Persistent per-user dirs (all under $HOME, bound into the sandbox). The
+# toolchain plus every global install the agents make live here and persist
+# across runs; the rest of $HOME is an empty tmpfs inside the sandbox, so the
+# agents can only write to these dirs (and the project) -- not the real home.
+AGENT_TOOLS="${HOME}/.local/share/agent-box"   # node, npm, uv, the CLIs, global installs (rw)
+AGENT_CONFIG="${HOME}/.config/agent-box"        # per-tool config (rw)
+AGENT_CACHE="${HOME}/.cache/agent-box"          # npm/pip/uv download caches (rw)
+NODE_VERSION="v24.11.0"                          # pinned toolchain node
+NPM_PKGS=(@anthropic-ai/claude-code opencode-ai @openai/codex)
 
-# One image for all three agents; built from container/Containerfile.
-IMAGE="agent-box"
-CONTAINERFILE="Containerfile"
+# Per-tool config wiring: "<subdir under AGENT_CONFIG>:<path under $HOME>". Each
+# is bound straight onto the path the tool looks for -- no symlinks.
+CONFIG_DIRS=(
+  claude:.claude
+  codex:.codex
+  opencode:.config/opencode
+  opencode/share:.local/share/opencode
+  opencode/state:.local/state/opencode
+  opencode/cache:.cache/opencode
+)
+CONFIG_FILES=( claude.json:.claude.json )       # seeded "{}" if absent; file-bound
 
-# Every tool's env, always exported (a tool ignores env it doesn't read), so the
-# launcher needs no per-tool env logic. Forwarded only when set (so empty values
-# don't shadow mounted config); literals always set. derive_tz appends TZ.
+# Every tool's env, always set (a tool ignores env it doesn't read). ENV_FORWARD
+# is passed through only when set; ENV_LITERAL is always applied; derive_tz adds TZ.
 ENV_FORWARD=(
   ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_AUTH_TOKEN
   OPENAI_API_KEY CODEX_API_KEY
@@ -34,39 +49,20 @@ ENV_LITERAL=(
 )
 
 usage() {
-  echo "Usage: ${0##*/} [-a DIR] [-v VOL] [-r VOL] [-t podman|charliecloud] [-b] [-h] <claude|opencode|codex> [tool args...]"
+  echo "Usage: ${0##*/} [-a DIR] [-v VOL] [-r VOL] [-h] <claude|opencode|codex> [tool args...]"
   echo
-  echo "  Run an AI coding agent in a rootless container. Container flags go BEFORE"
-  echo "  the tool name; everything after the tool name is passed to the tool"
-  echo "  verbatim (run '${0##*/} <tool> --help' for the tool's own help)."
+  echo "  Run an AI coding agent in an unprivileged bubblewrap sandbox. Flags go"
+  echo "  BEFORE the tool name; everything after it is passed to the tool verbatim"
+  echo "  (run '${0##*/} <tool> --help' for the tool's own help). The toolchain is"
+  echo "  installed into ~/.local/share/agent-box on first use (AGTBOX_REINSTALL=1"
+  echo "  forces a reinstall)."
   echo
-  echo "  Container args:"
-  echo "    -a DIR   App directory, mounted at the same path inside (default: cwd)"
-  echo "    -v VOL   Extra volume, mounted at the same path inside (repeatable)"
-  echo "    -r VOL   Extra volume, mounted READ-ONLY at the same path (repeatable; podman only -- charliecloud mounts rw)"
-  echo "    -t TYPE  Engine: podman or charliecloud (default: auto-detect)"
-  echo "    -b       Rebuild the image"
+  echo "  Flags:"
+  echo "    -a DIR   Project directory, bound at the same path inside (default: cwd)"
+  echo "    -v VOL   Extra dir, bound read-write at the same path (repeatable)"
+  echo "    -r VOL   Extra dir, bound read-only at the same path (repeatable)"
   echo "    -h       Show this help"
-  echo
-  echo "  Native tool flags (typed after the tool name):"
-  echo "     claude|opencode|codex"
-  echo "       -h    Show tool help"
   exit 1
-}
-
-# Pick an engine if not forced with -t. Prefers Charliecloud.
-agent::detect_engine() {
-  if [[ -n "${CONTAINER_TYPE}" ]]; then
-    return
-  fi
-  if command -v ch-run >/dev/null 2>&1; then
-    CONTAINER_TYPE="charliecloud"
-  elif command -v podman >/dev/null 2>&1; then
-    CONTAINER_TYPE="podman"
-  else
-    echo "Error: No supported container engine (podman or charliecloud) found." >&2
-    exit 1
-  fi
 }
 
 # Resolve APP_DIR and every extra volume to an absolute path.
@@ -79,9 +75,8 @@ agent::normalize_paths() {
   for i in "${!RO_VOLUMES[@]}"; do
     RO_VOLUMES[i]=$(realpath "${RO_VOLUMES[i]}")
   done
-  # Guard: a path given as BOTH -v (rw) and -r (ro) would be a duplicate mount
-  # target and podman would reject the run. Read-write wins -- drop it from
-  # RO_VOLUMES and warn.
+  # A path given as BOTH -v (rw) and -r (ro) would be a duplicate bind target and
+  # bwrap would reject it. Read-write wins -- drop it from RO_VOLUMES and warn.
   local kept=()
   for i in "${!RO_VOLUMES[@]}"; do
     local dup=false
@@ -92,7 +87,7 @@ agent::normalize_paths() {
       fi
     done
     if [[ "${dup}" == "true" ]]; then
-      echo "Warning: ${RO_VOLUMES[i]} given as both -v (rw) and -r (ro); mounting read-write." >&2
+      echo "Warning: ${RO_VOLUMES[i]} given as both -v (rw) and -r (ro); binding read-write." >&2
     else
       kept+=("${RO_VOLUMES[i]}")
     fi
@@ -100,112 +95,7 @@ agent::normalize_paths() {
   RO_VOLUMES=("${kept[@]}")
 }
 
-# Create the host side of the consolidated layout so a fresh user can launch.
-# config-layout.sh (the same script baked into the image) creates every target
-# subdir + seed file under ~/.config/agent-box -- the single bind source. Run
-# WITHOUT --symlinks here: on the host we only need the dirs/files to exist (the
-# in-container symlinks are baked into the image). Both engines refuse a missing
-# bind source, and config-layout.sh never clobbers existing config.
-agent::ensure_config_sources() {
-  bash "${PROJ_DIR}/container/config-layout.sh" "${HOME}/.config/agent-box"
-}
-
-# Copy the host CA bundle into container/certs/ for the image build. Baked into
-# agent-box so containers get through TLS-intercepting proxies. Source defaults
-# to ~/.local/share/certs, overridable via AGENT_CERTS_DIR; missing/empty is fine.
-agent::refresh_certs() {
-  local src="${AGENT_CERTS_DIR:-${HOME}/.local/share/certs}"
-  local dst="${PROJ_DIR}/container/certs"
-  rm -rf "${dst}"
-  mkdir -p "${dst}"
-  cp "${src}"/* "${dst}/" 2>/dev/null || true
-}
-
-# Lazily build the one agent-box image with podman.
-agent::build_podman() {
-  if [[ "${REBUILD}" == "true" ]]; then
-    podman image rm "${IMAGE}" 2>/dev/null || true
-  fi
-  pushd "${PROJ_DIR}/container" > /dev/null || exit
-  if ! podman image exists "${IMAGE}"; then
-    agent::refresh_certs
-    podman build -t "${IMAGE}" -f "${CONTAINERFILE}" .
-  fi
-  popd > /dev/null || exit
-}
-
-# Lazily build the one agent-box image with Charliecloud, stored under
-# container/.charliecloud/.
-agent::build_charliecloud() {
-  mkdir -p "${CH_STORAGE}"
-  if [[ "${REBUILD}" == "true" ]]; then
-    rm -rf "${CH_STORAGE:?}/${IMAGE:?}"
-    ch-image delete "${IMAGE}" 2>/dev/null || true
-  fi
-  pushd "${PROJ_DIR}/container" > /dev/null || exit
-  if [[ ! -d "${CH_STORAGE}/${IMAGE}" ]]; then
-    agent::refresh_certs
-    ch-image build -t "${IMAGE}" -f "${CONTAINERFILE}" .
-    ch-convert -i ch-image -o dir "${IMAGE}" "${CH_STORAGE}/${IMAGE}"
-  fi
-  popd > /dev/null || exit
-}
-
-# Build the podman run argv and exec it. Built as an array -- no eval.
-agent::run_podman() {
-  local args=(run -it --rm -v "${APP_DIR}:${APP_DIR}" -w "${APP_DIR}")
-  local mount var kv
-  for mount in "${VOLUMES[@]}"; do
-    args+=(-v "${mount}:${mount}")
-  done
-  for mount in "${RO_VOLUMES[@]}"; do
-    args+=(-v "${mount}:${mount}:ro")
-  done
-  args+=(-v "${HOME}/.config/agent-box/:/root/.config/agent-box/")
-  for var in "${ENV_FORWARD[@]}"; do
-    if [[ -n "${!var:-}" ]]; then
-      args+=(-e "${var}=${!var}")
-    fi
-  done
-  for kv in "${ENV_LITERAL[@]}"; do
-    args+=(-e "${kv}")
-  done
-  # `--` ends podman's option parsing before the image + command, so a passed-
-  # through tool arg that starts with `-` can't be misread as a podman flag.
-  args+=(-- "${IMAGE}" "${AGENT_BIN}" "${EXTRA_ARGS[@]}")
-  podman "${args[@]}"
-}
-
-# Build the Charliecloud ch-run argv and exec it.
-agent::run_charliecloud() {
-  local args=(--write-fake --private-tmp -b "${APP_DIR}:${APP_DIR}" --cd "${APP_DIR}")
-  local mount var kv
-  for mount in "${VOLUMES[@]}"; do
-    args+=(-b "${mount}:${mount}")
-  done
-  # ch-run has NO read-only bind option, so RO_VOLUMES are mounted READ-WRITE
-  # here. Warn once so the caller knows the -r guarantee isn't enforced under CC.
-  if [[ ${#RO_VOLUMES[@]} -gt 0 ]]; then
-    echo "Warning: Charliecloud cannot enforce read-only binds; mounting read-write: ${RO_VOLUMES[*]}" >&2
-    for mount in "${RO_VOLUMES[@]}"; do
-      args+=(-b "${mount}:${mount}")
-    done
-  fi
-  args+=(-b "${HOME}/.config/agent-box/:/root/.config/agent-box/")
-  # --env-no-expand makes ch-run pass the value verbatim (no path/$-expansion).
-  for var in "${ENV_FORWARD[@]}"; do
-    if [[ -n "${!var:-}" ]]; then
-      args+=(--env-no-expand "--set-env=${var}=${!var}")
-    fi
-  done
-  for kv in "${ENV_LITERAL[@]}"; do
-    args+=(--env-no-expand "--set-env=${kv}")
-  done
-  args+=("${CH_STORAGE}/${IMAGE}" -- "${AGENT_BIN}" "${EXTRA_ARGS[@]}")
-  ch-run "${args[@]}"
-}
-
-# Add timezone to env so container knows the time
+# Add the host timezone to the env so the sandbox reports local time.
 agent::derive_tz() {
   local tz=""
   tz=$(readlink -f /etc/localtime 2>/dev/null | sed -n 's#.*/zoneinfo/##p') || true
@@ -213,47 +103,129 @@ agent::derive_tz() {
   return 0
 }
 
-# Detect engine, derive TZ, normalise paths, ensure config, build, run.
-agent::launch() {
-  agent::detect_engine
-  agent::derive_tz
-  agent::normalize_paths
-  agent::ensure_config_sources
-  case "${CONTAINER_TYPE}" in
-    podman)
-      agent::build_podman
-      agent::run_podman
-      ;;
-    charliecloud)
-      CH_STORAGE="${PROJ_DIR}/container/.charliecloud"
-      agent::build_charliecloud
-      agent::run_charliecloud
-      ;;
-    *)
-      echo "Error: Unsupported container type: ${CONTAINER_TYPE}" >&2
-      exit 1
-      ;;
-  esac
+# Create the host-side bind sources so a fresh user can launch: the toolchain +
+# cache dirs, the per-tool config subdirs, and the seed config files (valid empty
+# JSON -- opencode rejects a present-but-invalid file). Never clobbers existing config.
+agent::ensure_sources() {
+  mkdir -p "${AGENT_TOOLS}" "${AGENT_CACHE}/npm" "${AGENT_CACHE}/pip" "${AGENT_CACHE}/uv"
+  local e f
+  for e in "${CONFIG_DIRS[@]}"; do
+    mkdir -p "${AGENT_CONFIG}/${e%%:*}"
+  done
+  for e in "${CONFIG_FILES[@]}"; do
+    f="${AGENT_CONFIG}/${e%%:*}"
+    mkdir -p "$(dirname "${f}")"
+    [[ -e "${f}" ]] || printf '{}' > "${f}"
+  done
 }
 
-# ---- main: parse container flags, then the tool name, then pass the rest ----
+# Populate the global BW array with the bwrap args shared by install + run: the
+# locked-down system binds (read-only), an empty tmpfs $HOME, the persistent
+# toolchain + cache (read-write), shared network, and the env (PATH + npm/pip/uv
+# routing into the persistent dirs + the env union).
+agent::bwrap_common() {
+  BW=(
+    --ro-bind /usr /usr  --ro-bind /bin /bin  --ro-bind /sbin /sbin
+    --ro-bind /lib /lib  --ro-bind-try /lib64 /lib64  --ro-bind /etc /etc
+    --dev /dev  --proc /proc  --tmpfs /tmp
+    --tmpfs "${HOME}"
+    --bind "${AGENT_TOOLS}" "${AGENT_TOOLS}"
+    --bind "${AGENT_CACHE}" "${AGENT_CACHE}"
+    --die-with-parent  --unshare-pid  --unshare-ipc  --unshare-uts
+    --setenv HOME "${HOME}"
+    --setenv PATH "${AGENT_TOOLS}/bin:${AGENT_TOOLS}/node/bin:/usr/bin:/bin"
+    --setenv npm_config_prefix "${AGENT_TOOLS}"
+    --setenv npm_config_cache "${AGENT_CACHE}/npm"
+    --setenv PIP_PREFIX "${AGENT_TOOLS}"
+    --setenv PYTHONUSERBASE "${AGENT_TOOLS}"
+    --setenv PIP_CACHE_DIR "${AGENT_CACHE}/pip"
+    --setenv PIP_BREAK_SYSTEM_PACKAGES "1"
+    --setenv UV_CACHE_DIR "${AGENT_CACHE}/uv"
+    --setenv UV_TOOL_DIR "${AGENT_TOOLS}/uv/tools"
+    --setenv UV_TOOL_BIN_DIR "${AGENT_TOOLS}/bin"
+  )
+  local var kv
+  for var in "${ENV_FORWARD[@]}"; do
+    [[ -n "${!var:-}" ]] && BW+=(--setenv "${var}" "${!var}")
+  done
+  for kv in "${ENV_LITERAL[@]}"; do
+    BW+=(--setenv "${kv%%=*}" "${kv#*=}")
+  done
+}
 
-# Defaults
+# Install the toolchain into AGENT_TOOLS from INSIDE a bwrap sandbox (toolchain +
+# cache rw, system ro, $HOME tmpfs) so the official installer scripts can't touch
+# the host. Idempotent: re-running upgrades in place. Needs host curl/tar/xz.
+agent::install_tools() {
+  local arch na
+  arch=$(uname -m)
+  case "${arch}" in
+    aarch64) na=arm64 ;;
+    x86_64)  na=x64 ;;
+    *) echo "Error: unsupported architecture '${arch}' for the node download." >&2; exit 1 ;;
+  esac
+  agent::bwrap_common
+  bwrap "${BW[@]}" -- /usr/bin/bash -c "
+    set -euo pipefail
+    mkdir -p '${AGENT_TOOLS}/node' '${AGENT_TOOLS}/bin'
+    echo 'Agent Box: downloading node ${NODE_VERSION} (${na})...' >&2
+    curl -fsSL 'https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-${na}.tar.xz' \
+      | tar -xJ --strip-components=1 -C '${AGENT_TOOLS}/node'
+    echo 'Agent Box: installing agent CLIs...' >&2
+    '${AGENT_TOOLS}/node/bin/npm' install -g --prefix '${AGENT_TOOLS}' --cache '${AGENT_CACHE}/npm' \
+      --no-fund --no-audit ${NPM_PKGS[*]}
+    echo 'Agent Box: installing uv...' >&2
+    curl -LsSf https://astral.sh/uv/install.sh \
+      | env UV_INSTALL_DIR='${AGENT_TOOLS}/bin' UV_NO_MODIFY_PATH=1 sh
+    date > '${AGENT_TOOLS}/.stamp'
+  "
+}
+
+# Install the toolchain on first use (or when AGTBOX_REINSTALL=1).
+agent::ensure_tools() {
+  if [[ "${AGTBOX_REINSTALL:-}" == "1" \
+     || ! -x "${AGENT_BIN}" \
+     || ! -x "${AGENT_TOOLS}/node/bin/node" \
+     || ! -x "${AGENT_TOOLS}/bin/uv" ]]; then
+    echo "Agent Box: setting up the toolchain in ${AGENT_TOOLS} (one-time)..." >&2
+    agent::install_tools
+  fi
+}
+
+# Build the bwrap run argv (as an array, no eval) and exec it.
+agent::run_bwrap() {
+  agent::bwrap_common
+  BW+=(--bind "${APP_DIR}" "${APP_DIR}" --chdir "${APP_DIR}")
+  local e m
+  for e in "${CONFIG_DIRS[@]}";  do BW+=(--bind "${AGENT_CONFIG}/${e%%:*}" "${HOME}/${e#*:}"); done
+  for e in "${CONFIG_FILES[@]}"; do BW+=(--bind "${AGENT_CONFIG}/${e%%:*}" "${HOME}/${e#*:}"); done
+  for m in "${VOLUMES[@]}";    do BW+=(--bind    "${m}" "${m}"); done
+  for m in "${RO_VOLUMES[@]}"; do BW+=(--ro-bind "${m}" "${m}"); done
+  # `--` ends bwrap's option parsing, so a `-`-leading tool arg can't be misread.
+  exec bwrap "${BW[@]}" -- "${AGENT_BIN}" "${EXTRA_ARGS[@]}"
+}
+
+# Derive TZ, normalise paths, ensure sources + toolchain, then run.
+agent::launch() {
+  agent::derive_tz
+  agent::normalize_paths
+  agent::ensure_sources
+  agent::ensure_tools
+  agent::run_bwrap
+}
+
+# ---- main: parse flags, then the tool name, then pass the rest verbatim ----
+
 APP_DIR=$(pwd)
-CONTAINER_TYPE=""
-REBUILD=false
 VOLUMES=()
 RO_VOLUMES=()
 
-# getopts stops at the first non-option token (the tool name), so container
-# flags are parsed here and everything from the tool name on is left in "$@".
-while getopts "a:v:t:r:bh" opt; do
+# getopts stops at the first non-option token (the tool name).
+while getopts "a:v:r:h" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
     r) RO_VOLUMES+=("$OPTARG") ;;
-    t) CONTAINER_TYPE=$OPTARG ;;
-    b) REBUILD=true ;;
     h|?) usage ;;
   esac
 done
@@ -268,8 +240,6 @@ fi
 shift
 EXTRA_ARGS=("$@")
 
-# One image serves all three agents; the tool name just selects the binary
-# (binary name == tool name). Config + env are tool-independent (set above).
 case "${TOOL}" in
   claude|opencode|codex) ;;
   *)
@@ -277,6 +247,6 @@ case "${TOOL}" in
     usage
     ;;
 esac
-AGENT_BIN="/usr/local/bin/${TOOL}"
+AGENT_BIN="${AGENT_TOOLS}/bin/${TOOL}"
 
 agent::launch
