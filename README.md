@@ -4,8 +4,6 @@ Run terminal AI coding agents — **Claude Code**, **opencode**, and **OpenAI Co
 
 There's no application code here — the "source" is one Bash launcher (`agtbox.sh`) plus a single Containerfile.
 
-> The GitHub repo is still named `podman-ai-agents` for now (it'll be renamed to `agent-box` later); the clone command below reflects that.
-
 ## Why
 
 - **Isolation.** The agent runs in an ephemeral (`--rm`) container — the container *is* the security boundary. Anything it installs or breaks is gone next run.
@@ -22,8 +20,8 @@ There's no application code here — the "source" is one Bash launcher (`agtbox.
 ## Quick start
 
 ```bash
-git clone https://github.com/cadejager/podman-ai-agents
-cd podman-ai-agents
+git clone https://github.com/cadejager/agent-box
+cd agent-box
 
 ./bin/agtbox.sh claude        # Claude Code in the current directory
 ./bin/agtbox.sh opencode      # opencode

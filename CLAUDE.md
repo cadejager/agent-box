@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Agent Box: a single Bash launcher + one Containerfile for running AI coding agents (Claude Code, opencode, codex) inside a rootless container. No application code or build system — the "source" is `bin/agtbox.sh`, `container/Containerfile`, and `container/config-layout.sh`. (Human-facing setup/usage live in `README.md`; this file is the terse architecture reference. The GitHub repo is still named `podman-ai-agents` pending a rename to `agent-box`.)
+Agent Box: a single Bash launcher + one Containerfile for running AI coding agents (Claude Code, opencode, codex) inside a rootless container. No application code or build system — the "source" is `bin/agtbox.sh`, `container/Containerfile`, and `container/config-layout.sh`. (Human-facing setup/usage live in `README.md`; this file is the terse architecture reference.)
 
 ## Common commands
 
