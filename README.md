@@ -85,12 +85,15 @@ bin/
   agtbox.sh               # the single launcher (sandbox construction + first-run install)
 test/
   argv.sh                 # stub-bwrap argv tests for agtbox.sh
+.github/workflows/
+  lint.yml                # CI: shellcheck + the argv tests
 CLAUDE.md                 # terse architecture reference (for AI assistants)
 ```
 
 ## Notes & caveats
 
-- **The agent can persist only to four places:** the project, `~/.config/agent-box`, `~/.cache/agent-box`, `~/.local/share/agent-box`. Everything else is read-only or an ephemeral tmpfs. Global installs persist (and are shared between runs) by design.
+- **The agent can persist only to four places:** the project, `~/.config/agent-box`, `~/.cache/agent-box`, `~/.local/share/agent-box`. Everything else is read-only or an ephemeral tmpfs; global installs persist (and are shared between runs) by design.
+- **What stays *readable*:** `/usr` and `/etc` are bound read-only (needed for the toolchain, DNS, and the CA trust store), so system files there — including things like `/etc/passwd` and host config — are visible to the agent, just not writable. Your home directory, SSH/cloud keys, and the rest of the filesystem are hidden entirely (`$HOME` is an empty tmpfs).
 - **Concurrent runs share** the config/cache/toolchain dirs (so tools see each other's installs); simultaneous installs of the same package could race.
 - **Coming from the old podman/Charliecloud image?** Reclaim it: `podman image rm agent-box` and `rm -rf ~/.cache/podman-ai-agents`. Config in `~/.config/agent-box` carries over.
 - See [`CLAUDE.md`](CLAUDE.md) for the architecture-level reference.

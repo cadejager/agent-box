@@ -32,6 +32,7 @@ mkdir -p "${TOOLS}/bin" "${TOOLS}/node/bin"
 for b in claude opencode codex uv; do printf '#!/bin/sh\n' >"${TOOLS}/bin/${b}"; done
 printf '#!/bin/sh\n' >"${TOOLS}/node/bin/node"
 chmod +x "${TOOLS}/bin/"* "${TOOLS}/node/bin/node"
+: >"${TOOLS}/.stamp"   # marks a complete install so ensure_tools skips it
 
 rc=0
 OUT=""
@@ -58,6 +59,10 @@ common() {
   has "ARG:CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"                 # env UNION, every tool
   has "ARG:OPENCODE_ENABLE_EXA"; has "ARG:OPENCODE_EXPERIMENTAL_LSP_TOOL"
   has "ARG:npm_config_prefix"; has "ARG:npm_config_cache"         # installs + caches persist
+  # Isolation primitives -- a refactor must not silently drop the sandbox's teeth:
+  has "ARG:--dev"; has "ARG:--proc"; has "ARG:--ro-bind-try"      # min /dev, /proc, optional /lib64
+  has "ARG:/sbin"                                                 # all system dirs ro-bound
+  has "ARG:--unshare-pid"; has "ARG:--unshare-ipc"; has "ARG:--unshare-uts"
   has "ARG:--die-with-parent"
   hasx "ARG:--"                                                   # bwrap arg terminator
   hasnot "ARG:--unshare-net"                                      # network shared (agents need it)

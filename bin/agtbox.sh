@@ -181,12 +181,14 @@ agent::install_tools() {
   "
 }
 
-# Install the toolchain on first use (or when AGTBOX_REINSTALL=1).
+# Install the toolchain on first use (or when AGTBOX_REINSTALL=1). The .stamp
+# is written only after a fully successful install, so a missing stamp means a
+# fresh or interrupted install and we (re)run; the AGENT_BIN check also re-installs
+# if the requested tool's binary went missing.
 agent::ensure_tools() {
   if [[ "${AGTBOX_REINSTALL:-}" == "1" \
-     || ! -x "${AGENT_BIN}" \
-     || ! -x "${AGENT_TOOLS}/node/bin/node" \
-     || ! -x "${AGENT_TOOLS}/bin/uv" ]]; then
+     || ! -e "${AGENT_TOOLS}/.stamp" \
+     || ! -x "${AGENT_BIN}" ]]; then
     echo "Agent Box: setting up the toolchain in ${AGENT_TOOLS} (one-time)..." >&2
     agent::install_tools
   fi
