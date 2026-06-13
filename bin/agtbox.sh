@@ -32,6 +32,9 @@ BIND_DIRS=(
   "${AGENT_CONFIG}/opencode-share:${HOME}/.local/share/opencode"
   "${AGENT_CONFIG}/opencode-state:${HOME}/.local/state/opencode"
   "${AGENT_CACHE}/opencode:${HOME}/.cache/opencode"
+  "${AGENT_CONFIG}/git:${HOME}/.config/git"
+  "${AGENT_CONFIG}/gh:${HOME}/.config/gh"
+  "${AGENT_CONFIG}/glab:${HOME}/.config/glab-cli"
 )
 BIND_FILES=( "${AGENT_CONFIG}/claude.json:${HOME}/.claude.json" )   # seeded "{}" if absent
 
@@ -133,6 +136,7 @@ agent::bwrap_common() {
     --die-with-parent  --unshare-pid  --unshare-ipc  --unshare-uts
     --setenv HOME "${HOME}"
     --setenv PATH "${AGENT_TOOLS}/bin:${AGENT_TOOLS}/node/bin:/usr/bin:/bin"
+    --setenv GIT_CONFIG_GLOBAL "${HOME}/.config/git/config"
     --setenv npm_config_prefix "${AGENT_TOOLS}"
     --setenv npm_config_cache "${AGENT_CACHE}/npm"
     --setenv PIP_PREFIX "${AGENT_TOOLS}"
