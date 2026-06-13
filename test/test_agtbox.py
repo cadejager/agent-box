@@ -18,25 +18,30 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
 AGTBOX = REPO / "bin" / "agtbox.py"
 
-# A stub for both engines. podman's `image`/`build`/`run ... uname -m` sub-commands
-# are answered so build/install are skipped; every other invocation (the real bwrap
-# or `podman run`) echoes its argv so the test can assert the constructed command.
+# A stub for both engines that tags what it was invoked for so a test can tell the
+# phases apart: an install (carries AGT_NPM_PKGS) -> INST:, an image build/rm ->
+# BUILD:, anything else (the real bwrap or `podman run`) -> ARG:. `podman image
+# exists` reports present (skip build); `run ... uname -m` answers the arch probe.
 STUB = r"""#!/usr/bin/env bash
+prefix=ARG
+case " $* " in *AGT_NPM_PKGS*) prefix=INST ;; esac
 case "$1" in
   image) exit 0 ;;
-  build) exit 0 ;;
+  build) printf 'BUILD:%s\n' "$@"; exit 0 ;;
   run)
     case " $* " in
       *" uname -m "*) echo aarch64; exit 0 ;;
     esac ;;
 esac
-printf 'ARG:%s\n' "$@"
+printf "${prefix}:%s\n" "$@"
 exit 0
 """
 
@@ -72,22 +77,39 @@ class LauncherTest(unittest.TestCase):
         path.write_text("#!/bin/sh\n")
         path.chmod(0o755)
 
-    def launch(self, *args, set_home=True, drop_home=False):
-        """Run agtbox.py; return (returncode, argv_list, stderr). argv_list is the
-        words the stubbed engine was exec'd with (the ARG: lines)."""
+    def _run(self, args, set_home=True, drop_home=False, path=None, env_add=None):
         env = dict(os.environ)
-        env["PATH"] = f"{self.stub}:{env['PATH']}"
+        env["PATH"] = path if path is not None else f"{self.stub}:{env['PATH']}"
         env.pop("AGTBOX_REINSTALL", None)
         if drop_home:
             env.pop("HOME", None)
         elif set_home:
             env["HOME"] = str(self.home)
-        proc = subprocess.run(
-            [sys.executable, str(AGTBOX), *args],
-            capture_output=True, text=True, env=env,
-        )
-        argv = [ln[4:] for ln in proc.stdout.splitlines() if ln.startswith("ARG:")]
-        return proc.returncode, argv, proc.stderr
+        for k, v in (env_add or {}).items():
+            if v is None:
+                env.pop(k, None)
+            else:
+                env[k] = v
+        return subprocess.run([sys.executable, str(AGTBOX), *args],
+                              capture_output=True, text=True, env=env)
+
+    def launch(self, *args, **kw):
+        """Run agtbox.py; return (returncode, argv_list, stderr). argv_list is the
+        ARG: words the stubbed engine was exec'd with for the agent run."""
+        p = self._run(list(args), **kw)
+        argv = [ln[4:] for ln in p.stdout.splitlines() if ln.startswith("ARG:")]
+        return p.returncode, argv, p.stderr
+
+    def launch_capture(self, *args, **kw):
+        """Like launch() but split the stub output by phase: .argv (agent run),
+        .inst (toolchain install), .build (image build/rm)."""
+        p = self._run(list(args), **kw)
+
+        def pick(pfx):
+            return [ln[len(pfx):] for ln in p.stdout.splitlines() if ln.startswith(pfx)]
+
+        return types.SimpleNamespace(rc=p.returncode, argv=pick("ARG:"),
+                                     inst=pick("INST:"), build=pick("BUILD:"), err=p.stderr)
 
     # convenience assertions
     def assertArg(self, argv, word):
@@ -293,11 +315,140 @@ class ErrorCases(LauncherTest):
         self.assertNotIn("Traceback", err)   # a clean message, not a crash
 
 
+class InstallTrigger(LauncherTest):
+    """ensure_tools(): when does first-run install fire? (toolchain is pre-seeded
+    in setUp; remove pieces of it to force the trigger)."""
+
+    def test_missing_stamp_triggers_install(self):
+        (self.tools / ".stamp").unlink()
+        r = self.launch_capture("-t", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(r.rc, 0, r.err)
+        self.assertTrue(r.inst, "a missing .stamp must trigger install")
+        self.assertIn("AGT_NPM_PKGS", r.inst)
+        self.assertTrue(r.argv, "the agent should still run after install")
+
+    def test_seeded_toolchain_skips_install(self):
+        r = self.launch_capture("-t", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(r.rc, 0, r.err)
+        self.assertFalse(r.inst, "a complete toolchain must skip install")
+
+    def test_reinstall_env_forces_install(self):
+        r = self.launch_capture("-t", "bwrap", "-a", str(self.app), "claude",
+                                env_add={"AGTBOX_REINSTALL": "1"})
+        self.assertEqual(r.rc, 0, r.err)
+        self.assertTrue(r.inst, "AGTBOX_REINSTALL=1 must reinstall despite the stamp")
+
+    def test_missing_bin_retriggers_install(self):
+        (self.tools / "bin/claude").unlink()
+        r = self.launch_capture("-t", "bwrap", "-a", str(self.app), "claude")
+        self.assertTrue(r.inst, "a missing CLI bin must re-trigger install")
+        r2 = self.launch_capture("-t", "bwrap", "-a", str(self.app), "codex")
+        self.assertFalse(r2.inst, "a present CLI must not trigger install")
+
+
+class InstallEnv(LauncherTest):
+    """The deliberate install-env asymmetry: bwrap install gets the full env
+    allowlist (via bwrap_common); podman install gets AGENT_ENV only."""
+
+    def setUp(self):
+        super().setUp()
+        (self.tools / ".stamp").unlink()   # force the install to run
+
+    def test_podman_install_is_agent_env_only(self):
+        r = self.launch_capture("-t", "podman", "-a", str(self.app), "claude")
+        self.assertEqual(r.rc, 0, r.err)
+        self.assertIn(f"HOME={self.home}", r.inst)            # AGENT_ENV present
+        self.assertIn(f"AGT_TOOLS={self.tools}", r.inst)      # AGT_* inputs present
+        # ENV_LITERAL / ENV_FORWARD are NOT passed to the podman install:
+        self.assertNotIn("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", r.inst)
+
+    def test_bwrap_install_has_full_allowlist(self):
+        r = self.launch_capture("-t", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(r.rc, 0, r.err)
+        self.assertIn("AGT_NPM_PKGS", r.inst)                 # AGT_* inputs
+        # bwrap install goes through bwrap_common -> the full env allowlist:
+        self.assertIn("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", r.inst)
+
+
+class EnvForward(LauncherTest):
+    """ENV_FORWARD is forwarded only for vars actually set on the host."""
+
+    def test_set_var_forwarded_bwrap(self):
+        rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app), "claude",
+                                    env_add={"ANTHROPIC_API_KEY": "sek"})
+        self.assertEqual(rc, 0, err)
+        self.assertArg(argv, "ANTHROPIC_API_KEY")   # --setenv key
+        self.assertArg(argv, "sek")
+
+    def test_set_var_forwarded_podman(self):
+        rc, argv, err = self.launch("-t", "podman", "-a", str(self.app), "claude",
+                                    env_add={"ANTHROPIC_API_KEY": "sek"})
+        self.assertEqual(rc, 0, err)
+        self.assertArg(argv, "ANTHROPIC_API_KEY=sek")
+
+    def test_unset_var_not_forwarded(self):
+        rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app), "claude",
+                                    env_add={"ANTHROPIC_API_KEY": None})  # ensure unset
+        self.assertEqual(rc, 0, err)
+        self.assertNoArg(argv, "ANTHROPIC_API_KEY")
+
+    def test_tz_in_podman_argv_not_bwrap(self):
+        # bwrap never sets TZ (it inherits host time via the /etc bind).
+        _, bw, _ = self.launch("-t", "bwrap", "-a", str(self.app), "claude")
+        self.assertFalse([a for a in bw if a.startswith("TZ=")])
+
+    @unittest.skipUnless(
+        os.path.islink("/etc/localtime") and "zoneinfo" in os.readlink("/etc/localtime"),
+        "needs /etc/localtime -> .../zoneinfo/<zone>")
+    def test_tz_derived_under_podman(self):
+        _, pd, err = self.launch("-t", "podman", "-a", str(self.app), "claude")
+        self.assertTrue([a for a in pd if a.startswith("TZ=")], "podman run should carry TZ")
+
+
+class NoEngine(LauncherTest):
+    def test_no_engine_on_path(self):
+        empty = self.tmp / "empty"
+        empty.mkdir()
+        rc, _, err = self.launch("claude", path=str(empty))   # neither bwrap nor podman
+        self.assertEqual(rc, 1)
+        self.assertIn("no sandbox engine found", err)
+
+
+class CollidingFlag(LauncherTest):
+    def test_tool_arg_colliding_with_launcher_flag_passes_through(self):
+        # `-a /x` AFTER the tool goes to the agent verbatim, NOT to the launcher.
+        rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app),
+                                    "claude", "-a", "/x")
+        self.assertEqual(rc, 0, err)
+        self.assertArg(argv, "--chdir")
+        self.assertArg(argv, str(self.app))         # project is still -a's pre-tool value
+        bin_i = argv.index(str(self.tools / "bin/claude"))
+        self.assertIn("-a", argv[bin_i:])           # -a /x sits after the agent bin
+        self.assertIn("/x", argv[bin_i:])
+
+
 # ---- unit tests of the pure helpers (import the module directly) -------------
 
 _spec = importlib.util.spec_from_file_location("agtbox", AGTBOX)
 agtbox = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(agtbox)
+
+
+def load_agtbox(home):
+    """Load a FRESH agtbox module with HOME pointed at `home`, so its module-level
+    AGENT_*/BIND_* constants resolve under a throwaway tree."""
+    saved = os.environ.get("HOME")
+    os.environ["HOME"] = str(home)
+    try:
+        spec = importlib.util.spec_from_file_location("agtbox_fresh", AGTBOX)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        if saved is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = saved
+    return mod
 
 
 class Helpers(unittest.TestCase):
@@ -333,6 +484,124 @@ class Helpers(unittest.TestCase):
         podman = agtbox.bind_args("podman")
         self.assertIn("/vol:/vol", podman)
         self.assertIn("/rovol:/rovol:ro", podman)
+
+
+class EnsureSources(unittest.TestCase):
+    def _home(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        home = tmp / "home"
+        home.mkdir()
+        return home
+
+    def test_creates_sources_and_seeds(self):
+        home = self._home()
+        m = load_agtbox(home)
+        m.ensure_sources()
+        cfg = home / ".config/agent-box"
+        for entry in m.BIND_DIRS:               # every bind source exists
+            src = entry.split(":", 1)[0]
+            self.assertTrue(os.path.isdir(src), f"missing bind source {src}")
+        self.assertEqual((cfg / "claude.json").read_text(), "{}")   # valid-JSON seed
+        self.assertTrue((cfg / "git/config").is_file())
+        self.assertEqual((cfg / "git/config").read_text(), "")
+        self.assertEqual(os.stat(cfg / "ssh").st_mode & 0o777, 0o700)  # ssh needs 0700
+
+    def test_existing_claude_json_left_untouched(self):
+        home = self._home()
+        cfg = home / ".config/agent-box"
+        cfg.mkdir(parents=True)
+        (cfg / "claude.json").write_text('{"theme":"dark"}')
+        load_agtbox(home).ensure_sources()
+        self.assertEqual((cfg / "claude.json").read_text(), '{"theme":"dark"}')
+
+
+class DeriveTz(unittest.TestCase):
+    def setUp(self):
+        saved = list(agtbox.ENV_LITERAL)   # derive_tz appends to this global; restore it
+        self.addCleanup(lambda: (agtbox.ENV_LITERAL.clear(), agtbox.ENV_LITERAL.extend(saved)))
+
+    def test_parses_zone_after_zoneinfo(self):
+        with mock.patch.object(agtbox.os, "readlink",
+                               return_value="../usr/share/zoneinfo/America/New_York"):
+            agtbox.derive_tz()
+        self.assertIn("TZ=America/New_York", agtbox.ENV_LITERAL)
+
+    def test_no_zoneinfo_marker_adds_nothing(self):
+        with mock.patch.object(agtbox.os, "readlink", return_value="/somewhere/else"):
+            agtbox.derive_tz()
+        self.assertFalse([x for x in agtbox.ENV_LITERAL if x.startswith("TZ=")])
+
+    def test_readlink_error_adds_nothing(self):
+        with mock.patch.object(agtbox.os, "readlink", side_effect=OSError):
+            agtbox.derive_tz()
+        self.assertFalse([x for x in agtbox.ENV_LITERAL if x.startswith("TZ=")])
+
+
+class RefreshCerts(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.addCleanup(setattr, agtbox, "PROJ_DIR", agtbox.PROJ_DIR)  # never touch the real repo
+        agtbox.PROJ_DIR = str(self.tmp / "proj")
+        self.dst = self.tmp / "proj/container/certs"
+        self.addCleanup(os.environ.pop, "AGENT_CERTS_DIR", None)
+
+    def test_copies_crt_skips_dotfiles_and_dirs(self):
+        src = self.tmp / "src"
+        (src / "sub").mkdir(parents=True)
+        (src / "company.crt").write_text("x")
+        (src / ".hidden.crt").write_text("x")
+        (src / "sub/nested.crt").write_text("x")
+        os.environ["AGENT_CERTS_DIR"] = str(src)
+        agtbox.refresh_certs()
+        self.assertEqual(sorted(p.name for p in self.dst.iterdir()), ["company.crt"])
+
+    def test_missing_source_is_fine(self):
+        os.environ["AGENT_CERTS_DIR"] = str(self.tmp / "nope")
+        agtbox.refresh_certs()   # must not raise
+        self.assertTrue(self.dst.is_dir())
+        self.assertEqual(list(self.dst.iterdir()), [])
+
+
+class BuildImage(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.addCleanup(setattr, agtbox, "PROJ_DIR", agtbox.PROJ_DIR)
+        self.addCleanup(setattr, agtbox, "REBUILD", agtbox.REBUILD)
+        agtbox.PROJ_DIR = str(self.tmp)                 # refresh_certs writes here, not the repo
+        self.addCleanup(os.environ.pop, "AGENT_CERTS_DIR", None)
+        os.environ["AGENT_CERTS_DIR"] = str(self.tmp / "nocerts")
+
+    def _build(self, image_present):
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append(list(argv))
+            rc = 0
+            if argv[:3] == ["podman", "image", "exists"] and not image_present:
+                rc = 1
+            return types.SimpleNamespace(returncode=rc)
+
+        with mock.patch.object(agtbox.subprocess, "run", fake_run):
+            agtbox.build_image()
+        return [" ".join(c) for c in calls]
+
+    def test_builds_when_image_absent(self):
+        agtbox.REBUILD = False
+        cmds = self._build(image_present=False)
+        self.assertTrue(any(c.startswith("podman build") for c in cmds))
+
+    def test_skips_build_when_present(self):
+        agtbox.REBUILD = False
+        cmds = self._build(image_present=True)
+        self.assertFalse(any(c.startswith("podman build") for c in cmds))
+
+    def test_rebuild_removes_image_first(self):
+        agtbox.REBUILD = True
+        cmds = self._build(image_present=False)
+        self.assertTrue(any("image rm" in c for c in cmds))
 
 
 if __name__ == "__main__":
