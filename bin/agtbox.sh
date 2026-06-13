@@ -19,18 +19,20 @@ set -eo pipefail
 # agents can only write to these dirs (and the project) -- not the real home.
 AGENT_TOOLS="${HOME}/.local/share/agent-box"   # node, npm, uv, the CLIs, global installs (rw)
 AGENT_CONFIG="${HOME}/.config/agent-box"        # per-tool config (rw)
-AGENT_CACHE="${HOME}/.cache/agent-box"          # npm/pip/uv download caches (rw)
+AGENT_STATE="${HOME}/.local/state/agent-box"    # per-tool state (rw)
+AGENT_CACHE="${HOME}/.cache/agent-box"          # npm/pip/uv + per-tool caches (rw)
 NPM_PKGS=(@anthropic-ai/claude-code opencode-ai @openai/codex)
 
 # Per-tool state wiring: "<host source path>:<path inside the sandbox>". Each host
-# dir/file is bound straight onto the path the tool looks for. Config/state live
-# under AGENT_CONFIG; the disposable cache under AGENT_CACHE.
+# dir is bound straight onto the path the tool looks for, namespaced under the
+# matching XDG base: config -> AGENT_CONFIG, data -> AGENT_TOOLS, state -> AGENT_STATE,
+# disposable cache -> AGENT_CACHE.
 BIND_DIRS=(
   "${AGENT_CONFIG}/claude:${HOME}/.claude"
   "${AGENT_CONFIG}/codex:${HOME}/.codex"
   "${AGENT_CONFIG}/opencode:${HOME}/.config/opencode"
-  "${AGENT_CONFIG}/opencode-share:${HOME}/.local/share/opencode"
-  "${AGENT_CONFIG}/opencode-state:${HOME}/.local/state/opencode"
+  "${AGENT_TOOLS}/opencode:${HOME}/.local/share/opencode"
+  "${AGENT_STATE}/opencode:${HOME}/.local/state/opencode"
   "${AGENT_CACHE}/opencode:${HOME}/.cache/opencode"
   "${AGENT_CONFIG}/git:${HOME}/.config/git"
   "${AGENT_CONFIG}/gh:${HOME}/.config/gh"

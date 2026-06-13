@@ -56,12 +56,12 @@ Flags come **before** the tool name; **everything after the tool name is passed 
 
 Session handling is just each tool's native syntax: claude `--continue` / `--resume [ID]` / `--fork-session`; opencode `--continue` / `--session ID` / `--fork`; codex `resume [ID]` / `fork [ID]`.
 
-`AGTBOX_REINSTALL=1 ./bin/agtbox.sh claude` reinstalls the toolchain (or just `rm -rf ~/.local/share/agent-box` and relaunch).
+`AGTBOX_REINSTALL=1 ./bin/agtbox.sh claude` reinstalls the toolchain in place (it leaves your config and opencode's data alone).
 
 ## How it works
 
 - **One self-contained launcher.** `bin/agtbox.sh` constructs a `bwrap …` command (as an argv array — no `eval`) and execs it. The tool name only selects the binary; the sandbox, env, and config wiring are identical for every agent.
-- **Locked-down sandbox.** `/usr`, `/bin`, `/lib`, `/etc`, … are bound **read-only**; `$HOME` and `/tmp` are fresh tmpfs; networking is shared (the agents reach their APIs); and only these are writable, each bound at its real path: your **project**, `~/.config/agent-box`, `~/.cache/agent-box`, `~/.local/share/agent-box`. Nothing else on the host is even visible.
+- **Locked-down sandbox.** `/usr`, `/bin`, `/lib`, `/etc`, … are bound **read-only**; `$HOME` and `/tmp` are fresh tmpfs; networking is shared (the agents reach their APIs); and only these are writable, each bound at its real path: your **project**, `~/.config/agent-box`, `~/.local/share/agent-box`, `~/.local/state/agent-box`, `~/.cache/agent-box`. Nothing else on the host is even visible.
 - **Persistent toolchain + global installs.** `~/.local/share/agent-box` holds node, `uv`, the agent CLIs, the `gh`/`glab` git-hosting CLIs, and anything an agent installs globally (`npm -g`, `pip`, `uv tool` — outside a venv). It persists across runs and is shared between tools, so installs stick around and the CLIs can auto-update. Project dependencies still belong in the project (a `.venv`, `node_modules`, …).
 - **Config, wired straight in.** Each tool's config is bound from `~/.config/agent-box/<tool>` onto the path the tool expects (`~/.claude`, `~/.codex`, opencode's XDG dirs, `~/.claude.json`, and `gh`/`glab`/`git` config so logins and git identity persist). One dir to back up or wipe.
 - **Download caches** (npm/pip/uv) live in `~/.cache/agent-box` and persist, so re-installs are fast.
@@ -87,7 +87,7 @@ CLAUDE.md                 # terse architecture reference (for AI assistants)
 
 ## Notes & caveats
 
-- **The agent can persist only to four places:** the project, `~/.config/agent-box`, `~/.cache/agent-box`, `~/.local/share/agent-box`. Everything else is read-only or an ephemeral tmpfs; global installs persist (and are shared between runs) by design.
+- **The agent can persist only to:** the project and the four `agent-box` dirs (`~/.config`, `~/.local/share`, `~/.local/state`, `~/.cache`). Everything else is read-only or an ephemeral tmpfs; global installs persist (and are shared between runs) by design.
 - **What stays *readable*:** `/usr` and `/etc` are bound read-only (needed for the toolchain, DNS, and the CA trust store), so system files there — including things like `/etc/passwd` and host config — are visible to the agent, just not writable. Your home directory, SSH/cloud keys, and the rest of the filesystem are hidden entirely (`$HOME` is an empty tmpfs).
 - **Concurrent runs share** the config/cache/toolchain dirs (so tools see each other's installs); simultaneous installs of the same package could race.
 - **Shared network.** The agent reaches the network like the host does — including services on `127.0.0.1` and cloud metadata endpoints. That's required for it to reach its APIs, but don't bind sensitive dev services to loopback while an agent is running.
