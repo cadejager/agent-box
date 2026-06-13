@@ -1,21 +1,21 @@
 # Agent Box
 
-Run terminal AI coding agents — **Claude Code**, **opencode**, and **OpenAI Codex** — inside an unprivileged **[bubblewrap](https://github.com/containers/bubblewrap)** sandbox, behind one small launcher. The agents run against your host's own tools, walled off from the rest of your machine.
+Run terminal AI coding agents — **Claude Code**, **opencode**, and **OpenAI Codex** — inside an unprivileged sandbox, behind one small launcher. On Linux it uses **[bubblewrap](https://github.com/containers/bubblewrap)** over your host's own tools; on macOS (or any host without bwrap) it uses **podman** over a slim Linux image. Either way the agents are walled off from the rest of your machine, and the same per-user toolchain is shared between both.
 
 There's no application code here — the "source" is a single Bash launcher, `bin/agtbox.sh`.
 
 ## Why
 
-- **Isolation.** Each agent runs in a fresh bubblewrap sandbox: your real `$HOME` is replaced by an empty tmpfs, the whole filesystem is read-only except a handful of dirs, and the agent can only persist to the project and to `~/.{config,cache,local/share}/agent-box`. A prompt-injected agent can't read your dotfiles/keys or scribble on your system.
+- **Isolation.** Each agent runs in a fresh sandbox: under bwrap your real `$HOME` is replaced by an empty tmpfs and the whole filesystem is read-only except a handful of dirs; under podman the rootfs is a throwaway image and the host filesystem isn't visible at all except the same handful of dirs. Either way the agent can only persist to the project and to `~/.{config,cache,local/share,local/state}/agent-box`. A prompt-injected agent can't read your dotfiles/keys or scribble on your system.
 - **Uses what you already have.** System packages (python, git, ripgrep, gcc, …) come straight from your host. Only the bits that aren't system-wide — node, `uv`, the three agent CLIs, and the GitHub/GitLab CLIs (`gh`/`glab`) — are installed into a per-user toolchain on first run.
 - **One launcher, no obfuscation.** A single `agtbox.sh` runs any of the three agents and passes each tool's *own* flags straight through — nothing new to learn or quote around.
 - **Config and tools persist; the sandbox doesn't.** Your agent config lives in `~/.config/agent-box`, the toolchain + anything an agent installs globally lives in `~/.local/share/agent-box`, and download caches in `~/.cache/agent-box` — all bound in, so logins, history, and installed tools survive while each run starts from a clean sandbox.
 
 ## Requirements
 
-- **bubblewrap** (`bwrap`) and **unprivileged user namespaces** (the default on most modern Linux; works without root or setuid). On Debian/Ubuntu: `apt install bubblewrap`.
-- **bash ≥ 4**, plus the host tools the agents lean on (`python3`, `git`, `curl`, `tar` are used during setup; `ripgrep`/`jq`/compilers as your projects need them).
-- Everything else — node, `uv`, and the agent CLIs — is **installed automatically on first run** into `~/.local/share/agent-box`. Local-model *serving* is out of scope (run e.g. [LM Studio](https://lmstudio.ai) separately and point an agent at it; see below).
+- **An engine:** either **bubblewrap** (`bwrap`) + **unprivileged user namespaces** — the default on most modern Linux, no root/setuid (Debian/Ubuntu: `apt install bubblewrap`) — **or podman** (used automatically when bwrap is absent, e.g. on **macOS**: `brew install podman && podman machine init && podman machine start`). The launcher prefers bwrap when present; force one with `-t podman|bwrap`.
+- **bash ≥ 4.** Under bwrap, the host tools the agents lean on (`python3`, `git`, `curl`, `tar` during setup; `ripgrep`/`jq`/compilers as projects need them). Under podman these come from the image instead, so the host needs only podman + bash.
+- Everything else — node, `uv`, and the agent CLIs — is **installed automatically on first run** into `~/.local/share/agent-box` (the same toolchain for both engines). Local-model *serving* is out of scope (run e.g. [LM Studio](https://lmstudio.ai) separately and point an agent at it; see below).
 
 ## Quick start
 
@@ -28,7 +28,7 @@ cd agent-box
 ./bin/agtbox.sh codex         # OpenAI Codex
 ```
 
-The **first** launch installs the toolchain (node + `uv` + the three CLIs + `gh`/`glab`) into `~/.local/share/agent-box` — a one-time download, done inside a sandbox so the installers can't touch your host. Later launches start instantly. Your current directory is bound into the sandbox **at the same absolute path**, so any path the agent prints is valid on your host. `bin/agtbox.sh` can be run from anywhere.
+The **first** launch installs the toolchain (node + `uv` + the three CLIs + `gh`/`glab`) into `~/.local/share/agent-box` — a one-time download, done inside the sandbox so the installers can't touch your host (under podman it also builds the image first). Later launches start instantly. Your current directory is bound into the sandbox **at the same absolute path**, so any path the agent prints is valid on your host. `bin/agtbox.sh` can be run from anywhere.
 
 ## Usage
 
@@ -43,6 +43,8 @@ Flags come **before** the tool name; **everything after the tool name is passed 
 | `-a DIR` | Project directory, bound at the same path inside (default: current dir) |
 | `-v VOL` | Extra dir, bound **read-write** at the same path (repeatable) |
 | `-r VOL` | Extra dir, bound **read-only** at the same path (repeatable) |
+| `-t ENG` | Engine: `podman` or `bwrap` (default: auto — bwrap on Linux, else podman) |
+| `-b` | Rebuild the podman image (podman engine only) |
 | `-h` | Show help |
 
 ```bash
@@ -60,8 +62,9 @@ Session handling is just each tool's native syntax: claude `--continue` / `--res
 
 ## How it works
 
-- **One self-contained launcher.** `bin/agtbox.sh` constructs a `bwrap …` command (as an argv array — no `eval`) and execs it. The tool name only selects the binary; the sandbox, env, and config wiring are identical for every agent.
-- **Locked-down sandbox.** `/usr`, `/bin`, `/lib`, `/etc`, … are bound **read-only**; `$HOME` and `/tmp` are fresh tmpfs; networking is shared (the agents reach their APIs); and only these are writable, each bound at its real path: your **project**, `~/.config/agent-box`, `~/.local/share/agent-box`, `~/.local/state/agent-box`, `~/.cache/agent-box`. Nothing else on the host is even visible.
+- **One self-contained launcher, two engines.** `bin/agtbox.sh` constructs a `bwrap …` (or `podman run …`) command as an argv array — no `eval` — and execs it. The tool name only selects the binary; the env and config wiring are identical for every agent and (by design) nearly identical between the two engines — everything is bound at the **same host path**, so the bind tables are shared.
+- **Locked-down sandbox (bwrap).** `/usr`, `/bin`, `/lib`, `/etc`, … are bound **read-only**; `$HOME` and `/tmp` are fresh tmpfs; networking is shared (the agents reach their APIs); and only these are writable, each bound at its real path: your **project**, `~/.config/agent-box`, `~/.local/share/agent-box`, `~/.local/state/agent-box`, `~/.cache/agent-box`. Nothing else on the host is even visible.
+- **Container sandbox (podman).** When bwrap isn't available, the same dirs are bind-mounted (`-v`, with `:ro` for `-r`) at the same paths into a throwaway container built from `container/Containerfile` (`debian:trixie` + git/ripgrep/openssh-client/build-essential/… — node/uv/the CLIs stay in the bind-mounted toolchain, so an image rebuild never touches them). It runs as the container's root, which rootless podman maps to your host user, so the files the agent writes stay owned by you; networking is shared. The image auto-builds on first use; `-b` rebuilds it.
 - **Persistent toolchain + global installs.** `~/.local/share/agent-box` holds node, `uv`, the agent CLIs, the `gh`/`glab` git-hosting CLIs, and anything an agent installs globally (`npm -g`, `pip`, `uv tool` — outside a venv). It persists across runs and is shared between tools, so installs stick around and the CLIs can auto-update. Project dependencies still belong in the project (a `.venv`, `node_modules`, …).
 - **Config, wired straight in.** Each tool's config is bound from `~/.config/agent-box/<tool>` onto the path the tool expects (`~/.claude`, `~/.codex`, opencode's XDG dirs, `~/.claude.json`, `gh`/`glab`/`git` config so logins and git identity persist, and `~/.ssh` so SSH keys/`known_hosts` are available for git push). Drop your SSH key into `~/.config/agent-box/ssh/`. One dir to back up or wipe.
 - **Download caches** (npm/pip/uv) live in `~/.cache/agent-box` and persist, so re-installs are fast.
@@ -78,8 +81,10 @@ Serve the model yourself (e.g. LM Studio), then (these env vars are forwarded in
 ```
 bin/
   agtbox.sh               # the single launcher (sandbox construction + first-run install)
+container/
+  Containerfile           # the podman engine's image (debian:trixie + runtime/build packages)
 test/
-  argv.sh                 # stub-bwrap argv tests for agtbox.sh
+  argv.sh                 # stub-bwrap/stub-podman argv tests for agtbox.sh
 .github/workflows/
   lint.yml                # CI: shellcheck + the argv tests
 CLAUDE.md                 # terse architecture reference (for AI assistants)
@@ -92,7 +97,9 @@ CLAUDE.md                 # terse architecture reference (for AI assistants)
 - **Concurrent runs share** the config/cache/toolchain dirs (so tools see each other's installs); simultaneous installs of the same package could race.
 - **Shared network.** The agent reaches the network like the host does — including services on `127.0.0.1` and cloud metadata endpoints. That's required for it to reach its APIs, but don't bind sensitive dev services to loopback while an agent is running.
 - **Recommended host hardening (TTY injection).** A sandboxed process sharing your terminal can use the legacy `TIOCSTI` ioctl to push keystrokes into your shell — commands that would run *after* the agent exits. Close it once on the host (it's the kernel default on some distros but not all): `echo 'dev.tty.legacy_tiocsti=0' | sudo tee /etc/sysctl.d/99-agtbox.conf && sudo sysctl --system`. This doesn't affect clipboard copy/paste (that's OSC 52 / `xclip`-style, unrelated to `TIOCSTI`).
-- **Coming from the old podman build?** `podman image rm agent-box` reclaims the now-unused image. Config in `~/.config/agent-box` carries over.
+- **macOS / podman.** podman runs a Linux VM that shares your `$HOME`, so the `agent-box` dirs and your project must live **under `$HOME`**.
+- **Behind a corporate proxy?** If a TLS-intercepting proxy sits between you and the internet, the **podman** engine bakes your company's CA certs into the image at build time: drop them (PEM, `.crt` extension) into `~/.local/share/certs/` (or set `AGENT_CERTS_DIR`) and they're trusted inside the container. The **bwrap** engine needs nothing — it reuses your host's `/etc` trust store, so whatever your host already trusts, the agents trust too.
+- **Coming from the old build?** The old image-based build (and its Charliecloud path) is gone; podman is back as the macOS engine but now uses a slim `agent-box` image built on demand. Config in `~/.config/agent-box` carries over; `podman image rm agent-box` forces a fresh image build next run.
 - See [`CLAUDE.md`](CLAUDE.md) for the architecture-level reference.
 
 ## License
