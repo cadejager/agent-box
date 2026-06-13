@@ -9,14 +9,12 @@
 # Flags come BEFORE the tool name; everything AFTER it is passed to the tool
 # VERBATIM (use the tool's own flags, e.g. `claude --resume`, `codex resume`).
 #
-# A faithful, function-for-function port of agtbox.sh. The flag scan deliberately
-# mirrors getopts (a hand-written loop that stops at the first non-option) rather
-# than argparse, so that a `-`-leading tool arg after the tool name is never
-# swallowed. The final engine command REPLACES this process via os.execvp, exactly
-# like bash `exec`. Argv is always built as a list -- there is never a shell, except
-# the deliberate `bash -c <install-script>` whose script is the bash here-doc from
-# the original, run INSIDE the sandbox (passed as argv to the engine, not via a
-# host shell).
+# The flag scan is a hand-written getopts-style loop (it stops at the first
+# non-option) rather than argparse, so a `-`-leading tool arg after the tool name
+# is never swallowed. The final engine command REPLACES this process via os.execvp.
+# Argv is always built as a list -- there is never a host shell, except the
+# deliberate `bash -c <install-script>`: a verbatim bash script run INSIDE the
+# sandbox (passed as argv to the engine, not via a host shell).
 
 import os
 import shutil
@@ -24,7 +22,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-HOME = os.environ["HOME"]
+HOME = os.environ.get("HOME")
+if not HOME:
+    print("Error: HOME is not set.", file=sys.stderr)
+    sys.exit(1)
 
 # Persistent per-user dirs (all under $HOME, bound into the sandbox). The
 # toolchain plus every global install the agents make live here and persist
@@ -222,6 +223,12 @@ def normalize_paths():
     APP_DIR = os.path.realpath(APP_DIR)
     VOLUMES = [os.path.realpath(v) for v in VOLUMES]
     RO_VOLUMES = [os.path.realpath(v) for v in RO_VOLUMES]
+    # A bind source must exist or the engine fails with an opaque error -- check
+    # up front and fail with a clear message instead.
+    for p in [APP_DIR, *VOLUMES, *RO_VOLUMES]:
+        if not os.path.exists(p):
+            print(f"Error: path does not exist: {p}", file=sys.stderr)
+            sys.exit(1)
     # A path given as BOTH -v (rw) and -r (ro) would be a duplicate bind target and
     # bwrap would reject it. Read-write wins -- drop it from RO_VOLUMES and warn.
     kept = []
@@ -265,9 +272,9 @@ def install_script():
     container), even when the host is macOS. Idempotent: re-running upgrades in
     place. node tracks the latest LTS, gh/glab their latest releases. Needs
     curl/tar/xz/python3 (from the host under bwrap; from the image under podman)."""
-    # Kept verbatim as the bash here-doc from agtbox.sh -- run via the engine's
-    # `bash -c`, NOT rewritten in Python. The single-quoted heredoc meant no
-    # launcher-side expansion, so this is a plain raw string with no f-string subs.
+    # A verbatim bash script -- run via the engine's `bash -c`, NOT rewritten in
+    # Python. A plain raw string (no f-string substitutions): the install reads its
+    # inputs from the AGT_* env vars the runner sets, with no launcher-side expansion.
     return r'''set -euo pipefail
 mkdir -p "${AGT_TOOLS}/node" "${AGT_TOOLS}/bin"
 
@@ -511,15 +518,13 @@ def launch():
 
 
 def parse_args(argv):
-    """Parse the leading flags exactly like getopts "a:v:r:t:bh": stop at the first
-    non-option token (the tool name), leaving everything from there on for the tool
-    VERBATIM. A bare `-` or a non-`-` token ends flag parsing; `--` is NOT special
-    to getopts here, but a lone `--` would itself end option parsing and be consumed
-    -- we mirror getopts, which stops at (and does not consume) the first
-    non-option. A lone `--` is getopts' explicit end-of-options marker: getopts
-    consumes it and stops, so we do the same (advance past it, then stop) -- this
-    is how you pass a tool whose first arg starts with `-`. Unknown flags / a
-    missing optarg print usage (exit 1), like getopts' `?` case.
+    """Parse the leading flags like getopts "a:v:r:t:bh": clustered flags (-bh),
+    attached or detached optargs (-aDIR / -a DIR), and stop at the first non-option
+    token (the tool name), leaving everything from there on for the tool VERBATIM. A
+    bare `-` or a non-`-` token stops parsing without being consumed; a lone `--` is
+    the explicit end-of-options marker -- consumed, then stop -- which is how you
+    pass a tool whose own first arg starts with `-`. An unknown flag or a missing
+    optarg prints usage (exit 1).
 
     Returns the index into argv where the tool name and its args begin."""
     global APP_DIR, ENGINE, REBUILD

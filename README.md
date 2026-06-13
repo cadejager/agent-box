@@ -2,19 +2,19 @@
 
 Run terminal AI coding agents — **Claude Code**, **opencode**, and **OpenAI Codex** — inside an unprivileged sandbox, behind one small launcher. On Linux it uses **[bubblewrap](https://github.com/containers/bubblewrap)** over your host's own tools; on macOS (or any host without bwrap) it uses **podman** over a slim Linux image. Either way the agents are walled off from the rest of your machine, and the same per-user toolchain is shared between both.
 
-There's no application code here — the "source" is a single Bash launcher, `bin/agtbox.sh`.
+There's no application code here — the "source" is a single Python launcher, `bin/agtbox.py`.
 
 ## Why
 
 - **Isolation.** Each agent runs in a fresh sandbox: under bwrap your real `$HOME` is replaced by an empty tmpfs and the whole filesystem is read-only except a handful of dirs; under podman the rootfs is a throwaway image and the host filesystem isn't visible at all except the same handful of dirs. Either way the agent can only persist to the project and to `~/.{config,cache,local/share,local/state}/agent-box`. A prompt-injected agent can't read your dotfiles/keys or scribble on your system.
 - **Uses what you already have.** System packages (python, git, ripgrep, gcc, …) come straight from your host. Only the bits that aren't system-wide — node, `uv`, the three agent CLIs, and the GitHub/GitLab CLIs (`gh`/`glab`) — are installed into a per-user toolchain on first run.
-- **One launcher, no obfuscation.** A single `agtbox.sh` runs any of the three agents and passes each tool's *own* flags straight through — nothing new to learn or quote around.
+- **One launcher, no obfuscation.** A single `agtbox.py` runs any of the three agents and passes each tool's *own* flags straight through — nothing new to learn or quote around.
 - **Config and tools persist; the sandbox doesn't.** Your agent config lives in `~/.config/agent-box`, the toolchain + anything an agent installs globally lives in `~/.local/share/agent-box`, and download caches in `~/.cache/agent-box` — all bound in, so logins, history, and installed tools survive while each run starts from a clean sandbox.
 
 ## Requirements
 
 - **An engine:** either **bubblewrap** (`bwrap`) + **unprivileged user namespaces** — the default on most modern Linux, no root/setuid (Debian/Ubuntu: `apt install bubblewrap`) — **or podman** (used automatically when bwrap is absent, e.g. on **macOS**: `brew install podman && podman machine init && podman machine start`). The launcher prefers bwrap when present; force one with `-t podman|bwrap`.
-- **bash ≥ 4.** Under bwrap, the host tools the agents lean on (`python3`, `git`, `curl`, `tar` during setup; `ripgrep`/`jq`/compilers as projects need them). Under podman these come from the image instead, so the host needs only podman + bash.
+- **python3** — the launcher itself is a Python 3 script (stdlib only, no third-party packages). Under bwrap, the host also supplies the tools the agents lean on (`git`, `curl`, `tar` during setup; `ripgrep`/`jq`/compilers as projects need them); under podman those come from the image, so the host needs only podman + python3.
 - Everything else — node, `uv`, and the agent CLIs — is **installed automatically on first run** into `~/.local/share/agent-box` (the same toolchain for both engines). Local-model *serving* is out of scope (run e.g. [LM Studio](https://lmstudio.ai) separately and point an agent at it; see below).
 
 ## Quick start
@@ -23,20 +23,20 @@ There's no application code here — the "source" is a single Bash launcher, `bi
 git clone https://github.com/cadejager/agent-box
 cd agent-box
 
-./bin/agtbox.sh claude        # Claude Code in the current directory
-./bin/agtbox.sh opencode      # opencode
-./bin/agtbox.sh codex         # OpenAI Codex
+./bin/agtbox.py claude        # Claude Code in the current directory
+./bin/agtbox.py opencode      # opencode
+./bin/agtbox.py codex         # OpenAI Codex
 ```
 
-The **first** launch installs the toolchain (node + `uv` + the three CLIs + `gh`/`glab`) into `~/.local/share/agent-box` — a one-time download, done inside the sandbox so the installers can't touch your host (under podman it also builds the image first). Later launches start instantly. Your current directory is bound into the sandbox **at the same absolute path**, so any path the agent prints is valid on your host. `bin/agtbox.sh` can be run from anywhere.
+The **first** launch installs the toolchain (node + `uv` + the three CLIs + `gh`/`glab`) into `~/.local/share/agent-box` — a one-time download, done inside the sandbox so the installers can't touch your host (under podman it also builds the image first). Later launches start instantly. Your current directory is bound into the sandbox **at the same absolute path**, so any path the agent prints is valid on your host. `bin/agtbox.py` can be run from anywhere.
 
 ## Usage
 
 ```
-agtbox.sh [flags] <claude|opencode|codex> [tool args…]
+agtbox.py [flags] <claude|opencode|codex> [tool args…]
 ```
 
-Flags come **before** the tool name; **everything after the tool name is passed to the agent verbatim** — use the tool's own flags. Run `agtbox.sh <tool> --help` for a given tool's own help.
+Flags come **before** the tool name; **everything after the tool name is passed to the agent verbatim** — use the tool's own flags. Run `agtbox.py <tool> --help` for a given tool's own help.
 
 | Flag | Meaning |
 |------|---------|
@@ -48,21 +48,21 @@ Flags come **before** the tool name; **everything after the tool name is passed 
 | `-h` | Show help |
 
 ```bash
-./bin/agtbox.sh -a ~/src/myproject claude          # run against a specific directory
-./bin/agtbox.sh claude --resume                    # resume — pick a claude session interactively
-./bin/agtbox.sh codex resume 0f3c1a…               # resume a specific codex session
-./bin/agtbox.sh claude --model opus --effort high  # the tool's own flags, straight through
-./bin/agtbox.sh -v ~/datasets opencode             # bind an extra directory (read-write)
-./bin/agtbox.sh -r ~/reference-data opencode       # bind an extra directory read-only
+./bin/agtbox.py -a ~/src/myproject claude          # run against a specific directory
+./bin/agtbox.py claude --resume                    # resume — pick a claude session interactively
+./bin/agtbox.py codex resume 0f3c1a…               # resume a specific codex session
+./bin/agtbox.py claude --model opus --effort high  # the tool's own flags, straight through
+./bin/agtbox.py -v ~/datasets opencode             # bind an extra directory (read-write)
+./bin/agtbox.py -r ~/reference-data opencode       # bind an extra directory read-only
 ```
 
 Session handling is just each tool's native syntax: claude `--continue` / `--resume [ID]` / `--fork-session`; opencode `--continue` / `--session ID` / `--fork`; codex `resume [ID]` / `fork [ID]`.
 
-`AGTBOX_REINSTALL=1 ./bin/agtbox.sh claude` reinstalls the toolchain in place (it leaves your config and opencode's data alone).
+`AGTBOX_REINSTALL=1 ./bin/agtbox.py claude` reinstalls the toolchain in place (it leaves your config and opencode's data alone).
 
 ## How it works
 
-- **One self-contained launcher, two engines.** `bin/agtbox.sh` constructs a `bwrap …` (or `podman run …`) command as an argv array — no `eval` — and execs it. The tool name only selects the binary; the env and config wiring are identical for every agent and (by design) nearly identical between the two engines — everything is bound at the **same host path**, so the bind tables are shared.
+- **One self-contained launcher, two engines.** `bin/agtbox.py` constructs a `bwrap …` (or `podman run …`) command as an argv array — no `eval` — and execs it. The tool name only selects the binary; the env and config wiring are identical for every agent and (by design) nearly identical between the two engines — everything is bound at the **same host path**, so the bind tables are shared.
 - **Locked-down sandbox (bwrap).** `/usr`, `/bin`, `/lib`, `/etc`, … are bound **read-only**; `$HOME` and `/tmp` are fresh tmpfs; networking is shared (the agents reach their APIs); and only these are writable, each bound at its real path: your **project**, `~/.config/agent-box`, `~/.local/share/agent-box`, `~/.local/state/agent-box`, `~/.cache/agent-box`. Nothing else on the host is even visible.
 - **Container sandbox (podman).** When bwrap isn't available, the same dirs are bind-mounted (`-v`, with `:ro` for `-r`) at the same paths into a throwaway container built from `container/Containerfile` (`debian:trixie` + git/ripgrep/openssh-client/build-essential/… — node/uv/the CLIs stay in the bind-mounted toolchain, so an image rebuild never touches them). It runs as the container's root, which rootless podman maps to your host user, so the files the agent writes stay owned by you; networking is shared. The image auto-builds on first use; `-b` rebuilds it.
 - **Persistent toolchain + global installs.** `~/.local/share/agent-box` holds node, `uv`, the agent CLIs, the `gh`/`glab` git-hosting CLIs, and anything an agent installs globally (`npm -g`, `pip`, `uv tool` — outside a venv). It persists across runs and is shared between tools, so installs stick around and the CLIs can auto-update. Project dependencies still belong in the project (a `.venv`, `node_modules`, …).
@@ -74,19 +74,19 @@ Session handling is just each tool's native syntax: claude `--continue` / `--res
 Serve the model yourself (e.g. LM Studio), then (these env vars are forwarded into the sandbox when set):
 
 - **Claude Code** — export `ANTHROPIC_BASE_URL` (and optionally `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_DEFAULT_SONNET_MODEL`).
-- **Codex** — set the endpoint in `~/.config/agent-box/codex/config.toml` (codex ignores `OPENAI_BASE_URL`), or `./bin/agtbox.sh codex --oss --local-provider lmstudio`.
+- **Codex** — set the endpoint in `~/.config/agent-box/codex/config.toml` (codex ignores `OPENAI_BASE_URL`), or `./bin/agtbox.py codex --oss --local-provider lmstudio`.
 
 ## Layout
 
 ```
 bin/
-  agtbox.sh               # the single launcher (sandbox construction + first-run install)
+  agtbox.py               # the single launcher (sandbox construction + first-run install)
 container/
   Containerfile           # the podman engine's image (debian:trixie + runtime/build packages)
 test/
-  argv.sh                 # stub-bwrap/stub-podman argv tests for agtbox.sh
+  test_agtbox.py          # unittest suite: stub-engine integration + unit tests
 .github/workflows/
-  lint.yml                # CI: shellcheck + the argv tests
+  lint.yml                # CI: ruff + the Python test suite
 CLAUDE.md                 # terse architecture reference (for AI assistants)
 ```
 

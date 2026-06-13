@@ -1,4 +1,0 @@
-# agtbox.sh is a single self-contained script (no sourced libraries), so it and
-# test/argv.sh lint cleanly with a plain `shellcheck bin/agtbox.sh test/argv.sh`.
-# No special configuration is needed right now; this file is the place to add
-# shellcheck settings if that changes.
