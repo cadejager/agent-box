@@ -16,3 +16,12 @@ RUN apt-get update \
       git less ripgrep openssh-client \
       build-essential \
  && rm -rf /var/lib/apt/lists/*
+
+# Bake any company CA certs the launcher staged into container/certs/ into the
+# image trust store (needed behind a TLS-intercepting proxy). Runs AFTER the apt
+# install so ca-certificates/update-ca-certificates exist. certs/ always exists
+# (a .gitkeep keeps it tracked) so the COPY never fails when there are none. Each
+# cert must be PEM with a .crt extension -- update-ca-certificates only picks up
+# *.crt files.
+COPY certs/ /usr/local/share/ca-certificates/
+RUN update-ca-certificates

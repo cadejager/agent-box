@@ -1,2 +1,6 @@
 # Per-user Claude Code settings (machine-local, should not be committed)
 .claude/settings.local.json
+
+# Company certs copied in at podman-image build time (host-specific)
+container/certs/*
+!container/certs/.gitkeep

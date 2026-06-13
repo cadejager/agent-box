@@ -342,6 +342,20 @@ agent::run_bwrap() {
   exec bwrap "${BW[@]}" -- "${AGENT_BIN}" "${EXTRA_ARGS[@]}"
 }
 
+# Copy the host's company CA certs into container/certs/ so the image build can
+# bake them into its trust store -- needed behind a TLS-intercepting proxy, since
+# the podman image starts from a fresh Debian trust store that lacks them. Source
+# defaults to ~/.local/share/certs, overridable via AGENT_CERTS_DIR; missing/empty
+# is fine (the cp is best-effort). podman engine only -- bwrap reuses the host's
+# /etc trust store via its --ro-bind /etc, so it needs no cert logic.
+agent::refresh_certs() {
+  local src="${AGENT_CERTS_DIR:-${HOME}/.local/share/certs}"
+  local dst="${PROJ_DIR}/container/certs"
+  rm -rf "${dst}"
+  mkdir -p "${dst}"
+  cp "${src}"/* "${dst}/" 2>/dev/null || true
+}
+
 # Lazily build the podman image (the read-only rootfs). Built on first use and
 # rebuilt with -b. node/uv/the CLIs are NOT baked in -- they come from the bound
 # toolchain (~/.local/share/agent-box), so a rebuild never disturbs them.
@@ -351,6 +365,7 @@ agent::build_image() {
   fi
   if ! podman image exists "${IMAGE}"; then
     echo "Agent Box: building the ${IMAGE} image (one-time)..." >&2
+    agent::refresh_certs
     podman build -t "${IMAGE}" -f "${PROJ_DIR}/container/Containerfile" "${PROJ_DIR}/container"
   fi
 }
