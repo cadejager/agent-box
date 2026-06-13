@@ -7,7 +7,7 @@ There's no application code here — the "source" is a single Bash launcher, `bi
 ## Why
 
 - **Isolation without a container image.** Each agent runs in a fresh bubblewrap sandbox: your real `$HOME` is replaced by an empty tmpfs, the whole filesystem is read-only except a handful of dirs, and the agent can only persist to the project and to `~/.{config,cache,local/share}/agent-box`. A prompt-injected agent can't read your dotfiles/keys or scribble on your system.
-- **Uses what you already have.** System packages (python, git, ripgrep, gcc, …) come straight from your host. Only the bits that aren't system-wide — node, `uv`, and the three agent CLIs — are installed into a per-user toolchain on first run. No multi-GB image to build or store.
+- **Uses what you already have.** System packages (python, git, ripgrep, gcc, …) come straight from your host. Only the bits that aren't system-wide — node, `uv`, the three agent CLIs, and the GitHub/GitLab CLIs (`gh`/`glab`) — are installed into a per-user toolchain on first run. No multi-GB image to build or store.
 - **One launcher, no obfuscation.** A single `agtbox.sh` runs any of the three agents and passes each tool's *own* flags straight through — nothing new to learn or quote around.
 - **Config and tools persist; the sandbox doesn't.** Your agent config lives in `~/.config/agent-box`, the toolchain + anything an agent installs globally lives in `~/.local/share/agent-box`, and download caches in `~/.cache/agent-box` — all bound in, so logins, history, and installed tools survive while each run starts from a clean sandbox.
 
@@ -28,7 +28,7 @@ cd agent-box
 ./bin/agtbox.sh codex         # OpenAI Codex
 ```
 
-The **first** launch installs the toolchain (node + `uv` + the three CLIs) into `~/.local/share/agent-box` — a one-time download, done inside a sandbox so the installers can't touch your host. Later launches start instantly. Your current directory is bound into the sandbox **at the same absolute path**, so any path the agent prints is valid on your host. `bin/agtbox.sh` can be run from anywhere.
+The **first** launch installs the toolchain (node + `uv` + the three CLIs + `gh`/`glab`) into `~/.local/share/agent-box` — a one-time download, done inside a sandbox so the installers can't touch your host. Later launches start instantly. Your current directory is bound into the sandbox **at the same absolute path**, so any path the agent prints is valid on your host. `bin/agtbox.sh` can be run from anywhere.
 
 ## Usage
 
@@ -62,7 +62,7 @@ Session handling is just each tool's native syntax: claude `--continue` / `--res
 
 - **One self-contained launcher.** `bin/agtbox.sh` constructs a `bwrap …` command (as an argv array — no `eval`) and execs it. The tool name only selects the binary; the sandbox, env, and config wiring are identical for every agent.
 - **Locked-down sandbox.** `/usr`, `/bin`, `/lib`, `/etc`, … are bound **read-only**; `$HOME` and `/tmp` are fresh tmpfs; networking is shared (the agents reach their APIs); and only these are writable, each bound at its real path: your **project**, `~/.config/agent-box`, `~/.cache/agent-box`, `~/.local/share/agent-box`. Nothing else on the host is even visible.
-- **Persistent toolchain + global installs.** `~/.local/share/agent-box` holds node, `uv`, the CLIs, and anything an agent installs globally (`npm -g`, `pip`, `uv tool` — outside a venv). It persists across runs and is shared between tools, so installs stick around and the CLIs can auto-update. Project dependencies still belong in the project (a `.venv`, `node_modules`, …).
+- **Persistent toolchain + global installs.** `~/.local/share/agent-box` holds node, `uv`, the agent CLIs, the `gh`/`glab` git-hosting CLIs, and anything an agent installs globally (`npm -g`, `pip`, `uv tool` — outside a venv). It persists across runs and is shared between tools, so installs stick around and the CLIs can auto-update. Project dependencies still belong in the project (a `.venv`, `node_modules`, …).
 - **Config, wired straight in.** Each tool's config is bound from `~/.config/agent-box/<tool>` onto the path the tool expects (`~/.claude`, `~/.codex`, opencode's XDG dirs, `~/.claude.json`) — direct binds, no symlinks. One dir to back up or wipe.
 - **Download caches** (npm/pip/uv) live in `~/.cache/agent-box` and persist, so re-installs are fast.
 - **Host-local time.** `/etc` is bound read-only, so `/etc/localtime` is visible inside the sandbox and the agent's clock matches the host automatically — no `TZ` needed.

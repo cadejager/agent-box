@@ -23,17 +23,18 @@ AGENT_CONFIG="${HOME}/.config/agent-box"        # per-tool config (rw)
 AGENT_CACHE="${HOME}/.cache/agent-box"          # npm/pip/uv download caches (rw)
 NPM_PKGS=(@anthropic-ai/claude-code opencode-ai @openai/codex)
 
-# Per-tool config wiring: "<subdir under AGENT_CONFIG>:<path under $HOME>". Each
-# is bound straight onto the path the tool looks for -- no symlinks.
-CONFIG_DIRS=(
-  claude:.claude
-  codex:.codex
-  opencode:.config/opencode
-  opencode/share:.local/share/opencode
-  opencode/state:.local/state/opencode
-  opencode/cache:.cache/opencode
+# Per-tool state wiring: "<host source path>:<path inside the sandbox>". Each host
+# dir/file is bound straight onto the path the tool looks for -- no symlinks.
+# Config/state live under AGENT_CONFIG; the disposable cache under AGENT_CACHE.
+BIND_DIRS=(
+  "${AGENT_CONFIG}/claude:${HOME}/.claude"
+  "${AGENT_CONFIG}/codex:${HOME}/.codex"
+  "${AGENT_CONFIG}/opencode:${HOME}/.config/opencode"
+  "${AGENT_CONFIG}/opencode-share:${HOME}/.local/share/opencode"
+  "${AGENT_CONFIG}/opencode-state:${HOME}/.local/state/opencode"
+  "${AGENT_CACHE}/opencode:${HOME}/.cache/opencode"
 )
-CONFIG_FILES=( claude.json:.claude.json )       # seeded "{}" if absent; file-bound
+BIND_FILES=( "${AGENT_CONFIG}/claude.json:${HOME}/.claude.json" )   # seeded "{}" if absent
 
 # Every tool's env, always set (a tool ignores env it doesn't read). ENV_FORWARD
 # is passed through only when set; ENV_LITERAL is always applied. (Host-local time
@@ -101,11 +102,11 @@ agent::normalize_paths() {
 agent::ensure_sources() {
   mkdir -p "${AGENT_TOOLS}" "${AGENT_CACHE}/npm" "${AGENT_CACHE}/pip" "${AGENT_CACHE}/uv"
   local e f
-  for e in "${CONFIG_DIRS[@]}"; do
-    mkdir -p "${AGENT_CONFIG}/${e%%:*}"
+  for e in "${BIND_DIRS[@]}"; do
+    mkdir -p "${e%%:*}"
   done
-  for e in "${CONFIG_FILES[@]}"; do
-    f="${AGENT_CONFIG}/${e%%:*}"
+  for e in "${BIND_FILES[@]}"; do
+    f="${e%%:*}"
     mkdir -p "$(dirname "${f}")"
     [[ -e "${f}" ]] || printf '{}' > "${f}"
   done
@@ -146,35 +147,59 @@ agent::bwrap_common() {
 }
 
 # Install the toolchain into AGENT_TOOLS from INSIDE a bwrap sandbox (toolchain +
-# cache rw, system ro, $HOME tmpfs) so the official installer scripts can't touch
-# the host. Idempotent: re-running upgrades in place. node tracks the latest LTS
-# (resolved from nodejs.org/dist/index.json). Needs host curl/tar/xz/python3.
+# cache rw, system ro, $HOME tmpfs) so the installer scripts can't touch the host.
+# Idempotent: re-running upgrades in place. node tracks the latest LTS, gh/glab
+# their latest releases. Needs host curl/tar/xz/python3.
 agent::install_tools() {
-  local arch na
-  arch=$(uname -m)
-  case "${arch}" in
-    aarch64) na=arm64 ;;
-    x86_64)  na=x64 ;;
-    *) echo "Error: unsupported architecture '${arch}' for the node download." >&2; exit 1 ;;
+  local narch goarch
+  case "$(uname -m)" in
+    aarch64) narch=arm64; goarch=arm64 ;;
+    x86_64)  narch=x64;   goarch=amd64 ;;
+    *) echo "Error: unsupported architecture '$(uname -m)'." >&2; exit 1 ;;
   esac
+  # A quoted here-doc -- NO launcher-side expansion; it reads its inputs from the
+  # AGT_* env vars set on the bwrap command below (avoids nested-quoting hazards).
+  local script
+  script=$(cat <<'INSTALL'
+set -euo pipefail
+mkdir -p "${AGT_TOOLS}/node" "${AGT_TOOLS}/bin"
+
+echo 'Agent Box: installing node (latest LTS)...' >&2
+nv=$(curl -fsSL https://nodejs.org/dist/index.json \
+  | python3 -c 'import json,sys; print(next(r["version"] for r in json.load(sys.stdin) if r["lts"]))')
+curl -fsSL "https://nodejs.org/dist/${nv}/node-${nv}-linux-${AGT_NARCH}.tar.xz" \
+  | tar -xJ --strip-components=1 -C "${AGT_TOOLS}/node"
+
+echo 'Agent Box: installing the agent CLIs...' >&2
+"${AGT_TOOLS}/node/bin/npm" install -g --prefix "${AGT_TOOLS}" --no-fund --no-audit ${AGT_NPM_PKGS}
+
+echo 'Agent Box: installing uv...' >&2
+curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="${AGT_TOOLS}/bin" UV_NO_MODIFY_PATH=1 sh
+
+echo 'Agent Box: installing gh (GitHub CLI)...' >&2
+gv=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')
+curl -fsSL "https://github.com/cli/cli/releases/download/${gv}/gh_${gv#v}_linux_${AGT_GOARCH}.tar.gz" \
+  | tar -xz -C /tmp
+install -m755 "/tmp/gh_${gv#v}_linux_${AGT_GOARCH}/bin/gh" "${AGT_TOOLS}/bin/gh"
+
+echo 'Agent Box: installing glab (GitLab CLI)...' >&2
+lv=$(curl -fsSL https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["tag_name"])')
+curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/${lv}/downloads/glab_${lv#v}_linux_${AGT_GOARCH}.tar.gz" \
+  | tar -xz -C /tmp
+install -m755 /tmp/bin/glab "${AGT_TOOLS}/bin/glab"
+
+date > "${AGT_TOOLS}/.stamp"
+INSTALL
+)
   agent::bwrap_common
-  bwrap "${BW[@]}" -- /usr/bin/bash -c "
-    set -euo pipefail
-    mkdir -p '${AGENT_TOOLS}/node' '${AGENT_TOOLS}/bin'
-    echo 'Agent Box: resolving the latest LTS node...' >&2
-    nv=\$(curl -fsSL https://nodejs.org/dist/index.json | python3 -c 'import json,sys; print(next(r[\"version\"] for r in json.load(sys.stdin) if r[\"lts\"]))')
-    [ -n \"\${nv}\" ] || { echo 'Agent Box: could not resolve the latest LTS node.' >&2; exit 1; }
-    echo \"Agent Box: downloading node \${nv} (${na})...\" >&2
-    curl -fsSL \"https://nodejs.org/dist/\${nv}/node-\${nv}-linux-${na}.tar.xz\" \
-      | tar -xJ --strip-components=1 -C '${AGENT_TOOLS}/node'
-    echo 'Agent Box: installing agent CLIs...' >&2
-    '${AGENT_TOOLS}/node/bin/npm' install -g --prefix '${AGENT_TOOLS}' --cache '${AGENT_CACHE}/npm' \
-      --no-fund --no-audit ${NPM_PKGS[*]}
-    echo 'Agent Box: installing uv...' >&2
-    curl -LsSf https://astral.sh/uv/install.sh \
-      | env UV_INSTALL_DIR='${AGENT_TOOLS}/bin' UV_NO_MODIFY_PATH=1 sh
-    date > '${AGENT_TOOLS}/.stamp'
-  "
+  bwrap "${BW[@]}" \
+    --setenv AGT_TOOLS "${AGENT_TOOLS}" \
+    --setenv AGT_NARCH "${narch}" \
+    --setenv AGT_GOARCH "${goarch}" \
+    --setenv AGT_NPM_PKGS "${NPM_PKGS[*]}" \
+    -- /usr/bin/bash -c "${script}"
 }
 
 # Install the toolchain on first use (or when AGTBOX_REINSTALL=1). The .stamp
@@ -195,8 +220,8 @@ agent::run_bwrap() {
   agent::bwrap_common
   BW+=(--bind "${APP_DIR}" "${APP_DIR}" --chdir "${APP_DIR}")
   local e m
-  for e in "${CONFIG_DIRS[@]}";  do BW+=(--bind "${AGENT_CONFIG}/${e%%:*}" "${HOME}/${e#*:}"); done
-  for e in "${CONFIG_FILES[@]}"; do BW+=(--bind "${AGENT_CONFIG}/${e%%:*}" "${HOME}/${e#*:}"); done
+  for e in "${BIND_DIRS[@]}";  do BW+=(--bind "${e%%:*}" "${e#*:}"); done
+  for e in "${BIND_FILES[@]}"; do BW+=(--bind "${e%%:*}" "${e#*:}"); done
   for m in "${VOLUMES[@]}";    do BW+=(--bind    "${m}" "${m}"); done
   for m in "${RO_VOLUMES[@]}"; do BW+=(--ro-bind "${m}" "${m}"); done
   # `--` ends bwrap's option parsing, so a `-`-leading tool arg can't be misread.
