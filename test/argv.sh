@@ -61,8 +61,8 @@ common() {
   has "ARG:OPENCODE_ENABLE_EXA"; has "ARG:OPENCODE_EXPERIMENTAL_LSP_TOOL"
   has "ARG:npm_config_prefix"; has "ARG:npm_config_cache"         # installs + caches persist
   # Isolation primitives -- a refactor must not silently drop the sandbox's teeth:
-  has "ARG:--dev"; has "ARG:--proc"; has "ARG:--ro-bind-try"      # min /dev, /proc, optional /lib64
-  has "ARG:/sbin"                                                 # all system dirs ro-bound
+  has "ARG:--dev"; has "ARG:--proc"; has "ARG:--ro-bind-try"      # min /dev, /proc, optional binds
+  has "ARG:/sbin"; has "ARG:/opt"                                 # system dirs ro-bound (incl. /opt)
   has "ARG:--unshare-pid"; has "ARG:--unshare-ipc"; has "ARG:--unshare-uts"
   has "ARG:--die-with-parent"
   hasx "ARG:--"                                                   # bwrap arg terminator

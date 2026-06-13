@@ -116,8 +116,9 @@ agent::ensure_sources() {
 # routing into the persistent dirs + the env union).
 agent::bwrap_common() {
   BW=(
-    --ro-bind /usr /usr  --ro-bind /bin /bin  --ro-bind /sbin /sbin
-    --ro-bind /lib /lib  --ro-bind-try /lib64 /lib64  --ro-bind /etc /etc
+    --ro-bind /usr /usr  --ro-bind /etc /etc
+    --ro-bind-try /bin /bin    --ro-bind-try /sbin /sbin  --ro-bind-try /lib /lib
+    --ro-bind-try /lib64 /lib64 --ro-bind-try /opt /opt   --ro-bind-try /Applications /Applications
     --dev /dev  --proc /proc  --tmpfs /tmp
     --tmpfs "${HOME}"
     --bind "${AGENT_TOOLS}" "${AGENT_TOOLS}"
