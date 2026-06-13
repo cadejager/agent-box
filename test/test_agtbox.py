@@ -221,6 +221,34 @@ class Tools(LauncherTest):
             self.assertNoArg(argv, word)
 
 
+class Bash(LauncherTest):
+    """`bash` is a launchable "tool" that drops an audit shell INTO the sandbox: the
+    system /usr/bin/bash, not a toolchain binary (so AGENT_BIN points at it directly)."""
+
+    def test_bwrap_shell(self):
+        rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app),
+                                    "-r", str(self.ro), "bash", "--", "-c", "echo hi")
+        self.assertEqual(rc, 0, err)
+        # the locked-down sandbox is the same as for the agents
+        self.assertArg(argv, "--clearenv")
+        for d in ("/usr", "/etc"):
+            self.assertArg(argv, d)
+        self.assertArg(argv, str(self.tools))                 # toolchain still bound
+        self.assertArg(argv, str(self.ro))                    # -r still mounted
+        # the program is the system shell, NOT ${AGENT_TOOLS}/bin/bash
+        self.assertArg(argv, "/usr/bin/bash")
+        self.assertNoArg(argv, str(self.tools / "bin/bash"))
+        # and -- -c "echo hi" passes through verbatim after the bin
+        bin_i = argv.index("/usr/bin/bash")
+        self.assertEqual(argv[bin_i + 1:], ["-c", "echo hi"])
+
+    def test_podman_shell(self):
+        rc, argv, err = self.launch("-t", "podman", "-a", str(self.app), "bash")
+        self.assertEqual(rc, 0, err)
+        self.assertArg(argv, "agent-box")        # the image
+        self.assertArg(argv, "/usr/bin/bash")
+
+
 class Passthrough(LauncherTest):
     def test_dash_leading_agent_arg_passes_through(self):
         # everything after `--` reaches the agent verbatim, incl. `-`-leading args

@@ -4,7 +4,7 @@
 # first use. Two engines: bubblewrap (bwrap) on Linux -- over the host's own
 # system packages -- and podman elsewhere (e.g. macOS) over a slim Linux image.
 #
-#   agtbox.py [-a DIR] [-v VOL] [-r VOL] [-t podman|bwrap] [-b] <claude|opencode|codex> [-- agent args...]
+#   agtbox.py [-a DIR] [-v VOL] [-r VOL] [-t podman|bwrap] [-b] <claude|opencode|codex|bash> [-- agent args...]
 #
 # Launcher flags are parsed with argparse; the agent's own args go AFTER a `--`
 # separator and are passed VERBATIM (e.g. `agtbox.py claude -- --resume`). A bare
@@ -526,7 +526,8 @@ def main():
                    help="engine (default: auto -- bwrap on Linux, else podman)")
     p.add_argument("-b", dest="rebuild", action="store_true",
                    help="rebuild the podman image (podman engine only)")
-    p.add_argument("tool", choices=("claude", "opencode", "codex"), help="the agent to run")
+    p.add_argument("tool", choices=("claude", "opencode", "codex", "bash"),
+                   help="the agent to run (or `bash` for an audit shell in the sandbox)")
     ns = p.parse_args(left)
 
     APP_DIR = ns.app_dir
@@ -535,7 +536,9 @@ def main():
     ENGINE = ns.engine or ""
     REBUILD = ns.rebuild
     TOOL = ns.tool
-    AGENT_BIN = f"{AGENT_TOOLS}/bin/{TOOL}"
+    # `bash` is the system shell (host /usr under bwrap, the image under podman), NOT
+    # a per-user toolchain binary -- so it lives at /usr/bin/bash, not in AGENT_TOOLS.
+    AGENT_BIN = "/usr/bin/bash" if TOOL == "bash" else f"{AGENT_TOOLS}/bin/{TOOL}"
     launch()
 
 
