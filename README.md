@@ -8,7 +8,7 @@ There's no application code here — the "source" is a single Python launcher, `
 
 - **Isolation.** Each agent runs in a fresh sandbox: under bwrap your real `$HOME` is replaced by an empty tmpfs and the whole filesystem is read-only except a handful of dirs; under podman the rootfs is a throwaway image and the host filesystem isn't visible at all except the same handful of dirs. Either way the agent can only persist to the project and to `~/.{config,cache,local/share,local/state}/agent-box`. A prompt-injected agent can't read your dotfiles/keys or scribble on your system.
 - **Uses what you already have.** System packages (python, git, ripgrep, gcc, …) come straight from your host. Only the bits that aren't system-wide — node, `uv`, the three agent CLIs, and the GitHub/GitLab CLIs (`gh`/`glab`) — are installed into a per-user toolchain on first run.
-- **One launcher, no obfuscation.** A single `agtbox.py` runs any of the three agents and passes each tool's *own* flags straight through — nothing new to learn or quote around.
+- **One launcher, no obfuscation.** A single `agtbox.py` runs any of the three agents and passes each tool's *own* flags straight through — put them after a `--` separator (`agtbox.py claude -- --resume`) and there's nothing else to learn.
 - **Config and tools persist; the sandbox doesn't.** Your agent config lives in `~/.config/agent-box`, the toolchain + anything an agent installs globally lives in `~/.local/share/agent-box`, and download caches in `~/.cache/agent-box` — all bound in, so logins, history, and installed tools survive while each run starts from a clean sandbox.
 
 ## Requirements
@@ -33,10 +33,10 @@ The **first** launch installs the toolchain (node + `uv` + the three CLIs + `gh`
 ## Usage
 
 ```
-agtbox.py [flags] <claude|opencode|codex> [tool args…]
+agtbox.py [flags] <claude|opencode|codex> [-- agent args…]
 ```
 
-Flags come **before** the tool name; **everything after the tool name is passed to the agent verbatim** — use the tool's own flags. Run `agtbox.py <tool> --help` for a given tool's own help.
+Flags come **before** the tool name. To pass arguments to the agent, put them **after a `--` separator** — everything after `--` is forwarded verbatim (the same convention as `cargo run --`, `kubectl exec --`, `env`). A bare `agtbox.py <tool>` needs no `--`. Run `agtbox.py <tool> -- --help` for a tool's own help. `-h` shows the launcher's help.
 
 | Flag | Meaning |
 |------|---------|
@@ -48,15 +48,15 @@ Flags come **before** the tool name; **everything after the tool name is passed 
 | `-h` | Show help |
 
 ```bash
-./bin/agtbox.py -a ~/src/myproject claude          # run against a specific directory
-./bin/agtbox.py claude --resume                    # resume — pick a claude session interactively
-./bin/agtbox.py codex resume 0f3c1a…               # resume a specific codex session
-./bin/agtbox.py claude --model opus --effort high  # the tool's own flags, straight through
-./bin/agtbox.py -v ~/datasets opencode             # bind an extra directory (read-write)
-./bin/agtbox.py -r ~/reference-data opencode       # bind an extra directory read-only
+./bin/agtbox.py -a ~/src/myproject claude              # run against a specific directory
+./bin/agtbox.py claude -- --resume                     # resume — pick a claude session interactively
+./bin/agtbox.py codex -- resume 0f3c1a…                # resume a specific codex session
+./bin/agtbox.py claude -- --model opus --effort high   # the tool's own flags, after --
+./bin/agtbox.py -v ~/datasets opencode                 # bind an extra directory (read-write)
+./bin/agtbox.py -r ~/reference-data opencode           # bind an extra directory read-only
 ```
 
-Session handling is just each tool's native syntax: claude `--continue` / `--resume [ID]` / `--fork-session`; opencode `--continue` / `--session ID` / `--fork`; codex `resume [ID]` / `fork [ID]`.
+Session handling is just each tool's native syntax, after `--`: claude `--continue` / `--resume [ID]` / `--fork-session`; opencode `--continue` / `--session ID` / `--fork`; codex `resume [ID]` / `fork [ID]`.
 
 `AGTBOX_REINSTALL=1 ./bin/agtbox.py claude` reinstalls the toolchain in place (it leaves your config and opencode's data alone).
 

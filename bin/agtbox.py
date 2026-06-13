@@ -4,18 +4,16 @@
 # first use. Two engines: bubblewrap (bwrap) on Linux -- over the host's own
 # system packages -- and podman elsewhere (e.g. macOS) over a slim Linux image.
 #
-#   agtbox.py [-a DIR] [-v VOL] [-r VOL] [-t podman|bwrap] [-b] [-h] claude|opencode|codex [tool args...]
+#   agtbox.py [-a DIR] [-v VOL] [-r VOL] [-t podman|bwrap] [-b] <claude|opencode|codex> [-- agent args...]
 #
-# Flags come BEFORE the tool name; everything AFTER it is passed to the tool
-# VERBATIM (use the tool's own flags, e.g. `claude --resume`, `codex resume`).
-#
-# The flag scan is a hand-written getopts-style loop (it stops at the first
-# non-option) rather than argparse, so a `-`-leading tool arg after the tool name
-# is never swallowed. The final engine command REPLACES this process via os.execvp.
-# Argv is always built as a list -- there is never a host shell, except the
-# deliberate `bash -c <install-script>`: a verbatim bash script run INSIDE the
-# sandbox (passed as argv to the engine, not via a host shell).
+# Launcher flags are parsed with argparse; the agent's own args go AFTER a `--`
+# separator and are passed VERBATIM (e.g. `agtbox.py claude -- --resume`). A bare
+# `agtbox.py claude` (no agent args) needs no `--`. The final engine command
+# REPLACES this process via os.execvp. Argv is always built as a list -- there is
+# never a host shell, except the deliberate `bash -c <install-script>`: a verbatim
+# bash script run INSIDE the sandbox (passed as argv to the engine, not a host shell).
 
+import argparse
 import os
 import shutil
 import subprocess
@@ -177,41 +175,20 @@ def _agt_env(narch, goarch):
     ]
 
 
-def usage():
-    print(f"Usage: {PROG} [-a DIR] [-v VOL] [-r VOL] [-t podman|bwrap] [-b] [-h] <claude|opencode|codex> [tool args...]")
-    print()
-    print("  Run an AI coding agent in an unprivileged sandbox (bwrap on Linux, else")
-    print("  podman). Flags go BEFORE the tool name; everything after it is passed to")
-    print(f"  the tool verbatim (run '{PROG} <tool> --help' for the tool's own help).")
-    print("  The toolchain is installed into ~/.local/share/agent-box on first use")
-    print("  (AGTBOX_REINSTALL=1 forces a reinstall).")
-    print()
-    print("  Flags:")
-    print("    -a DIR   Project directory, bound at the same path inside (default: cwd)")
-    print("    -v VOL   Extra dir, bound read-write at the same path (repeatable)")
-    print("    -r VOL   Extra dir, bound read-only at the same path (repeatable)")
-    print("    -t ENG   Engine: podman or bwrap (default: auto -- bwrap on Linux, else podman)")
-    print("    -b       Rebuild the podman image (podman engine only)")
-    print("    -h       Show this help")
-    sys.exit(1)
-
-
 def detect_engine():
-    """Pick the sandbox engine. Force it with -t; otherwise prefer bwrap (on Linux:
-    no image to build, faster start, tighter per-mount read-only binds) and fall
-    back to podman (macOS, or a Linux host without bwrap)."""
+    """Pick the sandbox engine. -t forces it (validated by argparse choices);
+    otherwise prefer bwrap (on Linux: no image to build, faster start, tighter
+    per-mount read-only binds) and fall back to podman (macOS, or a Linux host
+    without bwrap)."""
     global ENGINE
-    if ENGINE:
-        if ENGINE not in ("bwrap", "podman"):
-            print(f"Error: unknown engine '{ENGINE}' (expected podman or bwrap).", file=sys.stderr)
-            usage()
-    elif shutil.which("bwrap"):
-        ENGINE = "bwrap"
-    elif shutil.which("podman"):
-        ENGINE = "podman"
-    else:
-        print("Error: no sandbox engine found (need bwrap or podman).", file=sys.stderr)
-        sys.exit(1)
+    if not ENGINE:
+        if shutil.which("bwrap"):
+            ENGINE = "bwrap"
+        elif shutil.which("podman"):
+            ENGINE = "podman"
+        else:
+            print("Error: no sandbox engine found (need bwrap or podman).", file=sys.stderr)
+            sys.exit(1)
     if not shutil.which(ENGINE):
         print(f"Error: engine '{ENGINE}' is selected but not installed.", file=sys.stderr)
         sys.exit(1)
@@ -517,88 +494,48 @@ def launch():
         run_bwrap()
 
 
-def parse_args(argv):
-    """Parse the leading flags like getopts "a:v:r:t:bh": clustered flags (-bh),
-    attached or detached optargs (-aDIR / -a DIR), and stop at the first non-option
-    token (the tool name), leaving everything from there on for the tool VERBATIM. A
-    bare `-` or a non-`-` token stops parsing without being consumed; a lone `--` is
-    the explicit end-of-options marker -- consumed, then stop -- which is how you
-    pass a tool whose own first arg starts with `-`. An unknown flag or a missing
-    optarg prints usage (exit 1).
-
-    Returns the index into argv where the tool name and its args begin."""
-    global APP_DIR, ENGINE, REBUILD
-    takes_arg = {"a", "v", "r", "t"}
-    i = 0
-    n = len(argv)
-    while i < n:
-        tok = argv[i]
-        # getopts stops at the first token that isn't a `-`-prefixed option (and at
-        # a lone "-"). Everything from here on is the tool name + its verbatim args.
-        if len(tok) < 2 or tok[0] != "-":
-            break
-        # `--` explicitly ends option parsing: getopts consumes it and stops.
-        if tok == "--":
-            i += 1
-            break
-        # A cluster like "-bh" or "-a DIR" -- walk the option chars, getopts-style.
-        j = 1
-        consumed_rest = False
-        while j < len(tok):
-            opt = tok[j]
-            if opt in takes_arg:
-                # OPTARG is the rest of this token, or the next token if none.
-                if j + 1 < len(tok):
-                    optarg = tok[j + 1:]
-                else:
-                    if i + 1 >= n:
-                        # Missing required argument -> getopts ? case -> usage.
-                        print(f"Error: option -{opt} requires an argument.", file=sys.stderr)
-                        usage()
-                    i += 1
-                    optarg = argv[i]
-                if opt == "a":
-                    APP_DIR = optarg
-                elif opt == "v":
-                    VOLUMES.append(optarg)
-                elif opt == "r":
-                    RO_VOLUMES.append(optarg)
-                elif opt == "t":
-                    ENGINE = optarg
-                consumed_rest = True
-                break
-            elif opt == "b":
-                REBUILD = True
-            elif opt == "h":
-                usage()
-            else:
-                # Unknown option -> getopts ? case -> usage.
-                usage()
-            j += 1
-        i += 1
-        if consumed_rest:
-            continue
-    return i
-
-
 def main():
-    global TOOL, EXTRA_ARGS, AGENT_BIN
-    rest = sys.argv[1:]
-    idx = parse_args(rest)
-    positional = rest[idx:]
+    """Parse the launcher flags up to a `--` separator, then exec the agent with the
+    args after it: `agtbox.py [flags] <tool> -- [agent args...]`. The `--` is only
+    needed when passing args to the agent (a bare `agtbox.py <tool>` works too).
+    Launcher flags are valid anywhere before `--`; everything after `--` is the
+    agent's argv, untouched. argparse owns help/validation: `-h` -> stdout/exit 0,
+    a bad flag/tool/engine -> stderr/exit 2."""
+    global APP_DIR, VOLUMES, RO_VOLUMES, ENGINE, REBUILD, TOOL, EXTRA_ARGS, AGENT_BIN
+    argv = sys.argv[1:]
+    if "--" in argv:
+        sep = argv.index("--")
+        left, EXTRA_ARGS = argv[:sep], argv[sep + 1:]
+    else:
+        left, EXTRA_ARGS = argv, []
 
-    # First positional is the agent to run; the rest are its own args, verbatim.
-    TOOL = positional[0] if positional else ""
-    if not TOOL:
-        print("Error: no agent specified (expected claude, opencode, or codex).", file=sys.stderr)
-        usage()
-    EXTRA_ARGS = positional[1:]
+    p = argparse.ArgumentParser(
+        prog=PROG, allow_abbrev=False,
+        description="Run an AI coding agent (claude, opencode, codex) in an unprivileged "
+                    "sandbox -- bwrap on Linux, else podman.",
+        epilog="Pass arguments to the agent after `--`, e.g. `%(prog)s claude -- --resume`. "
+               "The toolchain installs into ~/.local/share/agent-box on first use "
+               "(AGTBOX_REINSTALL=1 forces a reinstall).")
+    p.add_argument("-a", dest="app_dir", default=os.getcwd(), metavar="DIR",
+                   help="project directory, bound at the same path inside (default: cwd)")
+    p.add_argument("-v", dest="volumes", action="append", default=[], metavar="VOL",
+                   help="extra dir, bound read-write at the same path (repeatable)")
+    p.add_argument("-r", dest="ro_volumes", action="append", default=[], metavar="VOL",
+                   help="extra dir, bound read-only at the same path (repeatable)")
+    p.add_argument("-t", dest="engine", choices=("podman", "bwrap"),
+                   help="engine (default: auto -- bwrap on Linux, else podman)")
+    p.add_argument("-b", dest="rebuild", action="store_true",
+                   help="rebuild the podman image (podman engine only)")
+    p.add_argument("tool", choices=("claude", "opencode", "codex"), help="the agent to run")
+    ns = p.parse_args(left)
 
-    if TOOL not in ("claude", "opencode", "codex"):
-        print(f"Error: unknown agent '{TOOL}' (expected claude, opencode, or codex).", file=sys.stderr)
-        usage()
+    APP_DIR = ns.app_dir
+    VOLUMES = ns.volumes
+    RO_VOLUMES = ns.ro_volumes
+    ENGINE = ns.engine or ""
+    REBUILD = ns.rebuild
+    TOOL = ns.tool
     AGENT_BIN = f"{AGENT_TOOLS}/bin/{TOOL}"
-
     launch()
 
 
