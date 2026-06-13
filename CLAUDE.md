@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Agent Box: a single Bash launcher that runs AI coding agents (Claude Code, opencode, codex) inside an unprivileged **bubblewrap (`bwrap`)** sandbox. No container image, no engine, no root. The only "source" is `bin/agtbox.sh`; `test/argv.sh` is a stub-`bwrap` argv test. (Human-facing setup/usage live in `README.md`; this file is the terse architecture reference.)
+Agent Box: a single Bash launcher that runs AI coding agents (Claude Code, opencode, codex) inside an unprivileged **bubblewrap (`bwrap`)** sandbox. The only "source" is `bin/agtbox.sh`; `test/argv.sh` is a stub-`bwrap` argv test. (Human-facing setup/usage live in `README.md`; this file is the terse architecture reference.)
 
 ## Common commands
 
@@ -17,7 +17,7 @@ Agent Box: a single Bash launcher that runs AI coding agents (Claude Code, openc
 
 ## Architecture
 
-**No image — a bubblewrap sandbox over host tools + a per-user toolchain.** System packages (python, git, ripgrep, compilers, …) come from the host's `/usr`; only node, `uv`, the three agent CLIs, and `gh`/`glab` (GitHub/GitLab CLIs) are installed into `~/.local/share/agent-box`. Requires `bwrap` + unprivileged user namespaces (validated on Debian 13 / aarch64).
+**A bubblewrap sandbox over host tools + a per-user toolchain.** System packages (python, git, ripgrep, compilers, …) come from the host's `/usr`; only node, `uv`, the three agent CLIs, and `gh`/`glab` (GitHub/GitLab CLIs) are installed into `~/.local/share/agent-box`. Requires `bwrap` + unprivileged user namespaces (validated on Debian 13 / aarch64).
 
 **Launcher — single self-contained `bin/agtbox.sh`.** `getopts` parses the flags and stops at the tool name; the rest is the agent's own args, forwarded verbatim. The tool name only selects the binary (`AGENT_BIN="${AGENT_TOOLS}/bin/${TOOL}"`) after a `claude|opencode|codex` validation. Functions: `normalize_paths` (realpath volumes + dedup a path given as both `-v` and `-r`, rw wins), `ensure_sources` (host-side bind sources), `ensure_tools`/`install_tools` (first-run setup), `bwrap_common` (shared sandbox args), `run_bwrap` (build argv + exec), `launch` (orchestrates).
 

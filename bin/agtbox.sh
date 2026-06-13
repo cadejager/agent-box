@@ -2,9 +2,8 @@
 # shellcheck shell=bash
 #
 # agtbox.sh -- run an AI coding agent (claude, opencode, codex) inside an
-# unprivileged bubblewrap sandbox. No container image, no engine: the agents run
-# against the host's system packages plus a small per-user toolchain that is
-# auto-installed on first use.
+# unprivileged bubblewrap sandbox over the host's system packages plus a small
+# per-user toolchain that is auto-installed on first use.
 #
 #   agtbox.sh [-a DIR] [-v VOL] [-r VOL] [-h] claude|opencode|codex [tool args...]
 #

@@ -67,9 +67,7 @@ common() {
   has "ARG:--die-with-parent"
   hasx "ARG:--"                                                   # bwrap arg terminator
   hasnot "ARG:--unshare-net"                                      # network shared (agents need it)
-  hasnot "ARG:--symlink"                                          # no symlinks anywhere
-  hasnot "ARG:.agtbox-ephemeral"                                  # installs persist, not ephemeral
-  hasnot "ARG:/usr/local/bin/claude"                             # tools live under ~/.local/share now
+  hasnot "ARG:--symlink"                                          # direct binds, never bwrap --symlink
 }
 
 echo "[claude] sandbox binds, union env, agent bin, verbatim passthrough, -r"

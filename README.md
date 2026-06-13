@@ -1,13 +1,13 @@
 # Agent Box
 
-Run terminal AI coding agents — **Claude Code**, **opencode**, and **OpenAI Codex** — inside an unprivileged **[bubblewrap](https://github.com/containers/bubblewrap)** sandbox, behind one small launcher. No container image, no daemon, no root — the agents run against your host's own tools, walled off from the rest of your machine.
+Run terminal AI coding agents — **Claude Code**, **opencode**, and **OpenAI Codex** — inside an unprivileged **[bubblewrap](https://github.com/containers/bubblewrap)** sandbox, behind one small launcher. The agents run against your host's own tools, walled off from the rest of your machine.
 
 There's no application code here — the "source" is a single Bash launcher, `bin/agtbox.sh`.
 
 ## Why
 
-- **Isolation without a container image.** Each agent runs in a fresh bubblewrap sandbox: your real `$HOME` is replaced by an empty tmpfs, the whole filesystem is read-only except a handful of dirs, and the agent can only persist to the project and to `~/.{config,cache,local/share}/agent-box`. A prompt-injected agent can't read your dotfiles/keys or scribble on your system.
-- **Uses what you already have.** System packages (python, git, ripgrep, gcc, …) come straight from your host. Only the bits that aren't system-wide — node, `uv`, the three agent CLIs, and the GitHub/GitLab CLIs (`gh`/`glab`) — are installed into a per-user toolchain on first run. No multi-GB image to build or store.
+- **Isolation.** Each agent runs in a fresh bubblewrap sandbox: your real `$HOME` is replaced by an empty tmpfs, the whole filesystem is read-only except a handful of dirs, and the agent can only persist to the project and to `~/.{config,cache,local/share}/agent-box`. A prompt-injected agent can't read your dotfiles/keys or scribble on your system.
+- **Uses what you already have.** System packages (python, git, ripgrep, gcc, …) come straight from your host. Only the bits that aren't system-wide — node, `uv`, the three agent CLIs, and the GitHub/GitLab CLIs (`gh`/`glab`) — are installed into a per-user toolchain on first run.
 - **One launcher, no obfuscation.** A single `agtbox.sh` runs any of the three agents and passes each tool's *own* flags straight through — nothing new to learn or quote around.
 - **Config and tools persist; the sandbox doesn't.** Your agent config lives in `~/.config/agent-box`, the toolchain + anything an agent installs globally lives in `~/.local/share/agent-box`, and download caches in `~/.cache/agent-box` — all bound in, so logins, history, and installed tools survive while each run starts from a clean sandbox.
 
