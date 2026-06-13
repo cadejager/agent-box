@@ -35,11 +35,16 @@ BIND_DIRS=(
 )
 BIND_FILES=( "${AGENT_CONFIG}/claude.json:${HOME}/.claude.json" )   # seeded "{}" if absent
 
-# Every tool's env, always set (a tool ignores env it doesn't read). ENV_FORWARD
-# is passed through only when set; ENV_LITERAL is always applied.
+# The sandbox runs with --clearenv (see bwrap_common), so ONLY these reach the
+# agent -- a real allowlist, not the host's whole environment (which would leak
+# any exported secret). ENV_FORWARD is forwarded when set (auth/model config;
+# terminal/locale so the TUIs render; proxy vars for installs/APIs behind a
+# proxy); ENV_LITERAL is always applied.
 ENV_FORWARD=(
-  ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_AUTH_TOKEN
+  ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_DEFAULT_SONNET_MODEL
   OPENAI_API_KEY CODEX_API_KEY
+  TERM COLORTERM LANG LANGUAGE LC_ALL LC_CTYPE
+  HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
 )
 ENV_LITERAL=(
   CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1
@@ -112,10 +117,12 @@ agent::ensure_sources() {
 
 # Populate the global BW array with the bwrap args shared by install + run: the
 # locked-down system binds (read-only), an empty tmpfs $HOME, the persistent
-# toolchain + cache (read-write), shared network, and the env (PATH + npm/pip/uv
-# routing into the persistent dirs + the env union).
+# toolchain + cache (read-write), shared network, and -- starting from a wiped
+# env (--clearenv, so no host secrets leak) -- the env (PATH + npm/pip/uv routing
+# into the persistent dirs + the env union/allowlist).
 agent::bwrap_common() {
   BW=(
+    --clearenv
     --ro-bind /usr /usr  --ro-bind /etc /etc
     --ro-bind-try /bin /bin    --ro-bind-try /sbin /sbin  --ro-bind-try /lib /lib
     --ro-bind-try /lib64 /lib64 --ro-bind-try /opt /opt   --ro-bind-try /Applications /Applications

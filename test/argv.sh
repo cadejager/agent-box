@@ -56,6 +56,7 @@ common() {
   has "ARG:${THOME}/.config/agent-box/claude.json"; has "ARG:${THOME}/.claude.json"  # claude.json FILE bind
   has "ARG:${THOME}/.config/agent-box/opencode"; has "ARG:${THOME}/.config/opencode"
   has "ARG:${THOME}/.cache/agent-box/opencode"; has "ARG:${THOME}/.cache/opencode"   # cache from the cache dir
+  has "ARG:--clearenv"                                            # wipe host env; --setenv is the allowlist
   has "ARG:--setenv"
   has "ARG:CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"                 # env UNION, every tool
   has "ARG:OPENCODE_ENABLE_EXA"; has "ARG:OPENCODE_EXPERIMENTAL_LSP_TOOL"
