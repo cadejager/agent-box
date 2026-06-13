@@ -253,12 +253,13 @@ date > "${AGT_TOOLS}/.stamp"
 INSTALL
 }
 
-# Map `uname -m` to the (node, go) arch names the node.js and gh/glab release
-# tarballs use, printed as "<narch> <goarch>". $1 = a `uname -m` value.
+# Set NARCH/GOARCH (the node.js and gh/glab release-tarball arch names) from a
+# `uname -m` value ($1). Globals, like bwrap_common's BW -- the install runners
+# read them straight after calling this.
 agent::arch_pair() {
   case "$1" in
-    aarch64) echo "arm64 arm64" ;;
-    x86_64)  echo "x64 amd64" ;;
+    aarch64) NARCH=arm64; GOARCH=arm64 ;;
+    x86_64)  NARCH=x64;   GOARCH=amd64 ;;
     *) echo "Error: unsupported architecture '$1'." >&2; return 1 ;;
   esac
 }
@@ -267,15 +268,14 @@ agent::arch_pair() {
 # ro, $HOME tmpfs) so the installer scripts can't touch the host. Arch is the host's
 # -- bwrap is Linux-only, so host arch == run arch.
 agent::install_via_bwrap() {
-  local script pair narch goarch
+  local script
   script=$(agent::install_script)
-  pair=$(agent::arch_pair "$(uname -m)") || exit 1
-  narch="${pair%% *}"; goarch="${pair##* }"
+  agent::arch_pair "$(uname -m)" || exit 1
   agent::bwrap_common
   bwrap "${BW[@]}" \
     --setenv AGT_TOOLS "${AGENT_TOOLS}" \
-    --setenv AGT_NARCH "${narch}" \
-    --setenv AGT_GOARCH "${goarch}" \
+    --setenv AGT_NARCH "${NARCH}" \
+    --setenv AGT_GOARCH "${GOARCH}" \
     --setenv AGT_NPM_PKGS "${NPM_PKGS[*]}" \
     -- /usr/bin/bash -c "${script}"
 }
@@ -284,10 +284,9 @@ agent::install_via_bwrap() {
 # container is itself the isolation. Arch comes from the IMAGE, not the host -- a
 # macOS host is a different OS/arch from the Linux container that runs the toolchain.
 agent::install_via_podman() {
-  local script pair narch goarch kv
+  local script kv
   script=$(agent::install_script)
-  pair=$(agent::arch_pair "$(podman run --rm "${IMAGE}" uname -m)") || exit 1
-  narch="${pair%% *}"; goarch="${pair##* }"
+  agent::arch_pair "$(podman run --rm "${IMAGE}" uname -m)" || exit 1
   # No --userns=keep-id: rootless podman already maps the container's root to the
   # invoking host user, so files written to the mounted toolchain are owned by you
   # AND $HOME is writable -- which opencode's postinstall needs (it runs the freshly
@@ -301,8 +300,8 @@ agent::install_via_podman() {
   for kv in "${AGENT_ENV[@]}"; do PD+=(-e "${kv}"); done
   PD+=(
     -e "AGT_TOOLS=${AGENT_TOOLS}"
-    -e "AGT_NARCH=${narch}"
-    -e "AGT_GOARCH=${goarch}"
+    -e "AGT_NARCH=${NARCH}"
+    -e "AGT_GOARCH=${GOARCH}"
     -e "AGT_NPM_PKGS=${NPM_PKGS[*]}"
   )
   podman "${PD[@]}" -- "${IMAGE}" /usr/bin/bash -c "${script}"
