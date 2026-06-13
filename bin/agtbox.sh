@@ -2,14 +2,15 @@
 # shellcheck shell=bash
 #
 # agtbox.sh -- run an AI coding agent (claude, opencode, codex) inside an
-# unprivileged bubblewrap sandbox over the host's system packages plus a small
-# per-user toolchain that is auto-installed on first use.
+# unprivileged sandbox over a small per-user toolchain that is auto-installed on
+# first use. Two engines: bubblewrap (bwrap) on Linux -- over the host's own
+# system packages -- and podman elsewhere (e.g. macOS) over a slim Linux image.
 #
-#   agtbox.sh [-a DIR] [-v VOL] [-r VOL] [-h] claude|opencode|codex [tool args...]
+#   agtbox.sh [-a DIR] [-v VOL] [-r VOL] [-t podman|bwrap] [-b] [-h] claude|opencode|codex [tool args...]
 #
 # Flags come BEFORE the tool name; everything AFTER it is passed to the tool
 # VERBATIM (use the tool's own flags, e.g. `claude --resume`, `codex resume`).
-# Requires bash >= 4 and bwrap (bubblewrap).
+# Requires bash >= 4 and either bwrap (bubblewrap) or podman.
 
 set -eo pipefail
 
@@ -22,6 +23,11 @@ AGENT_CONFIG="${HOME}/.config/agent-box"        # per-tool config (rw)
 AGENT_STATE="${HOME}/.local/state/agent-box"    # per-tool state (rw)
 AGENT_CACHE="${HOME}/.cache/agent-box"          # npm/pip/uv + per-tool caches (rw)
 NPM_PKGS=(@anthropic-ai/claude-code opencode-ai @openai/codex)
+
+# Repo root (the podman engine's Containerfile lives under container/) and the
+# name of the image that engine builds and runs.
+PROJ_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+IMAGE="agent-box"
 
 # Per-tool state wiring: "<host source path>:<path inside the sandbox>". Each host
 # dir is bound straight onto the path the tool looks for, namespaced under the
@@ -65,21 +71,64 @@ ENV_LITERAL=(
   OPENCODE_EXPERIMENTAL_LSP_TOOL=true
 )
 
+# The environment BOTH engines set: HOME + PATH + routing every package manager's
+# global installs into the persistent toolchain and its caches into AGENT_CACHE.
+# Kept as "K=V" strings from one source so bwrap (--setenv K V) and podman (-e K=V)
+# can't drift apart.
+AGENT_ENV=(
+  "HOME=${HOME}"
+  "PATH=${AGENT_TOOLS}/bin:${AGENT_TOOLS}/node/bin:/usr/bin:/bin"
+  "npm_config_prefix=${AGENT_TOOLS}"
+  "npm_config_cache=${AGENT_CACHE}/npm"
+  "PIP_PREFIX=${AGENT_TOOLS}"
+  "PYTHONUSERBASE=${AGENT_TOOLS}"
+  "PIP_CACHE_DIR=${AGENT_CACHE}/pip"
+  "PIP_BREAK_SYSTEM_PACKAGES=1"
+  "UV_CACHE_DIR=${AGENT_CACHE}/uv"
+  "UV_TOOL_DIR=${AGENT_TOOLS}/uv/tools"
+  "UV_TOOL_BIN_DIR=${AGENT_TOOLS}/bin"
+)
+
 usage() {
-  echo "Usage: ${0##*/} [-a DIR] [-v VOL] [-r VOL] [-h] <claude|opencode|codex> [tool args...]"
+  echo "Usage: ${0##*/} [-a DIR] [-v VOL] [-r VOL] [-t podman|bwrap] [-b] [-h] <claude|opencode|codex> [tool args...]"
   echo
-  echo "  Run an AI coding agent in an unprivileged bubblewrap sandbox. Flags go"
-  echo "  BEFORE the tool name; everything after it is passed to the tool verbatim"
-  echo "  (run '${0##*/} <tool> --help' for the tool's own help). The toolchain is"
-  echo "  installed into ~/.local/share/agent-box on first use (AGTBOX_REINSTALL=1"
-  echo "  forces a reinstall)."
+  echo "  Run an AI coding agent in an unprivileged sandbox (bwrap on Linux, else"
+  echo "  podman). Flags go BEFORE the tool name; everything after it is passed to"
+  echo "  the tool verbatim (run '${0##*/} <tool> --help' for the tool's own help)."
+  echo "  The toolchain is installed into ~/.local/share/agent-box on first use"
+  echo "  (AGTBOX_REINSTALL=1 forces a reinstall)."
   echo
   echo "  Flags:"
   echo "    -a DIR   Project directory, bound at the same path inside (default: cwd)"
   echo "    -v VOL   Extra dir, bound read-write at the same path (repeatable)"
   echo "    -r VOL   Extra dir, bound read-only at the same path (repeatable)"
+  echo "    -t ENG   Engine: podman or bwrap (default: auto -- bwrap on Linux, else podman)"
+  echo "    -b       Rebuild the podman image (podman engine only)"
   echo "    -h       Show this help"
   exit 1
+}
+
+# Pick the sandbox engine. Force it with -t; otherwise prefer bwrap (on Linux: no
+# image to build, faster start, tighter per-mount read-only binds) and fall back to
+# podman (macOS, or a Linux host without bwrap).
+agent::detect_engine() {
+  if [[ -n "${ENGINE}" ]]; then
+    case "${ENGINE}" in
+      bwrap|podman) ;;
+      *) echo "Error: unknown engine '${ENGINE}' (expected podman or bwrap)." >&2; usage ;;
+    esac
+  elif command -v bwrap >/dev/null 2>&1; then
+    ENGINE=bwrap
+  elif command -v podman >/dev/null 2>&1; then
+    ENGINE=podman
+  else
+    echo "Error: no sandbox engine found (need bwrap or podman)." >&2
+    exit 1
+  fi
+  command -v "${ENGINE}" >/dev/null 2>&1 || {
+    echo "Error: engine '${ENGINE}' is selected but not installed." >&2
+    exit 1
+  }
 }
 
 # Resolve APP_DIR and every extra volume to an absolute path.
@@ -151,19 +200,9 @@ agent::bwrap_common() {
     --bind "${AGENT_TOOLS}" "${AGENT_TOOLS}"
     --bind "${AGENT_CACHE}" "${AGENT_CACHE}"
     --die-with-parent  --unshare-pid  --unshare-ipc  --unshare-uts
-    --setenv HOME "${HOME}"
-    --setenv PATH "${AGENT_TOOLS}/bin:${AGENT_TOOLS}/node/bin:/usr/bin:/bin"
-    --setenv npm_config_prefix "${AGENT_TOOLS}"
-    --setenv npm_config_cache "${AGENT_CACHE}/npm"
-    --setenv PIP_PREFIX "${AGENT_TOOLS}"
-    --setenv PYTHONUSERBASE "${AGENT_TOOLS}"
-    --setenv PIP_CACHE_DIR "${AGENT_CACHE}/pip"
-    --setenv PIP_BREAK_SYSTEM_PACKAGES "1"
-    --setenv UV_CACHE_DIR "${AGENT_CACHE}/uv"
-    --setenv UV_TOOL_DIR "${AGENT_TOOLS}/uv/tools"
-    --setenv UV_TOOL_BIN_DIR "${AGENT_TOOLS}/bin"
   )
   local var kv
+  for kv in "${AGENT_ENV[@]}"; do BW+=(--setenv "${kv%%=*}" "${kv#*=}"); done
   for var in "${ENV_FORWARD[@]}"; do
     [[ -n "${!var:-}" ]] && BW+=(--setenv "${var}" "${!var}")
   done
@@ -172,21 +211,15 @@ agent::bwrap_common() {
   done
 }
 
-# Install the toolchain into AGENT_TOOLS from INSIDE a bwrap sandbox (toolchain +
-# cache rw, system ro, $HOME tmpfs) so the installer scripts can't touch the host.
-# Idempotent: re-running upgrades in place. node tracks the latest LTS, gh/glab
-# their latest releases. Needs host curl/tar/xz/python3.
-agent::install_tools() {
-  local narch goarch
-  case "$(uname -m)" in
-    aarch64) narch=arm64; goarch=arm64 ;;
-    x86_64)  narch=x64;   goarch=amd64 ;;
-    *) echo "Error: unsupported architecture '$(uname -m)'." >&2; exit 1 ;;
-  esac
-  # A quoted here-doc -- NO launcher-side expansion; it reads its inputs from the
-  # AGT_* env vars set on the bwrap command below (avoids nested-quoting hazards).
-  local script
-  script=$(cat <<'INSTALL'
+# The toolchain install script: a quoted here-doc (NO launcher-side expansion) that
+# reads its inputs from the AGT_* env vars the runner sets (avoids nested-quoting
+# hazards). Shared by both engines, and always targets linux -- the toolchain only
+# ever RUNS inside Linux (the bwrap sandbox, or the podman Linux container), even
+# when the host is macOS. Idempotent: re-running upgrades in place. node tracks the
+# latest LTS, gh/glab their latest releases. Needs curl/tar/xz/python3 (from the
+# host under bwrap; from the image under podman).
+agent::install_script() {
+  cat <<'INSTALL'
 set -euo pipefail
 mkdir -p "${AGT_TOOLS}/node" "${AGT_TOOLS}/bin"
 
@@ -218,7 +251,26 @@ install -m755 /tmp/bin/glab "${AGT_TOOLS}/bin/glab"
 
 date > "${AGT_TOOLS}/.stamp"
 INSTALL
-)
+}
+
+# Map `uname -m` to the (node, go) arch names the node.js and gh/glab release
+# tarballs use, printed as "<narch> <goarch>". $1 = a `uname -m` value.
+agent::arch_pair() {
+  case "$1" in
+    aarch64) echo "arm64 arm64" ;;
+    x86_64)  echo "x64 amd64" ;;
+    *) echo "Error: unsupported architecture '$1'." >&2; return 1 ;;
+  esac
+}
+
+# Install the toolchain from INSIDE a bwrap sandbox (toolchain + cache rw, system
+# ro, $HOME tmpfs) so the installer scripts can't touch the host. Arch is the host's
+# -- bwrap is Linux-only, so host arch == run arch.
+agent::install_via_bwrap() {
+  local script pair narch goarch
+  script=$(agent::install_script)
+  pair=$(agent::arch_pair "$(uname -m)") || exit 1
+  narch="${pair%% *}"; goarch="${pair##* }"
   agent::bwrap_common
   bwrap "${BW[@]}" \
     --setenv AGT_TOOLS "${AGENT_TOOLS}" \
@@ -226,6 +278,36 @@ INSTALL
     --setenv AGT_GOARCH "${goarch}" \
     --setenv AGT_NPM_PKGS "${NPM_PKGS[*]}" \
     -- /usr/bin/bash -c "${script}"
+}
+
+# Install the toolchain from INSIDE the podman image (toolchain + cache rw); the
+# container is itself the isolation. Arch comes from the IMAGE, not the host -- a
+# macOS host is a different OS/arch from the Linux container that runs the toolchain.
+agent::install_via_podman() {
+  local script pair narch goarch
+  script=$(agent::install_script)
+  pair=$(agent::arch_pair "$(podman run --rm "${IMAGE}" uname -m)") || exit 1
+  narch="${pair%% *}"; goarch="${pair##* }"
+  local PD=(run --rm)
+  [[ "$(uname -s)" == Linux ]] && PD+=(--userns=keep-id)
+  PD+=(
+    --security-opt label=disable
+    -v "${AGENT_TOOLS}:${AGENT_TOOLS}"
+    -v "${AGENT_CACHE}:${AGENT_CACHE}"
+    -e "AGT_TOOLS=${AGENT_TOOLS}"
+    -e "AGT_NARCH=${narch}"
+    -e "AGT_GOARCH=${goarch}"
+    -e "AGT_NPM_PKGS=${NPM_PKGS[*]}"
+  )
+  podman "${PD[@]}" -- "${IMAGE}" /usr/bin/bash -c "${script}"
+}
+
+# Install the toolchain via the selected engine.
+agent::install_tools() {
+  case "${ENGINE}" in
+    bwrap)  agent::install_via_bwrap ;;
+    podman) agent::install_via_podman ;;
+  esac
 }
 
 # Install the toolchain on first use (or when AGTBOX_REINSTALL=1). The .stamp
@@ -254,12 +336,76 @@ agent::run_bwrap() {
   exec bwrap "${BW[@]}" -- "${AGENT_BIN}" "${EXTRA_ARGS[@]}"
 }
 
-# Normalise paths, ensure sources + toolchain, then run.
+# Lazily build the podman image (the read-only rootfs). Built on first use and
+# rebuilt with -b. node/uv/the CLIs are NOT baked in -- they come from the bound
+# toolchain (~/.local/share/agent-box), so a rebuild never disturbs them.
+agent::build_image() {
+  if [[ "${REBUILD}" == "true" ]]; then
+    podman image rm "${IMAGE}" 2>/dev/null || true
+  fi
+  if ! podman image exists "${IMAGE}"; then
+    echo "Agent Box: building the ${IMAGE} image (one-time)..." >&2
+    podman build -t "${IMAGE}" -f "${PROJ_DIR}/container/Containerfile" "${PROJ_DIR}/container"
+  fi
+}
+
+# A fresh podman container's clock is UTC -- bwrap inherits host-local time via its
+# /etc bind, but podman has no host /etc/localtime. Pass the host zone as TZ instead
+# of binding /etc/localtime (portable to macOS, where that symlink points into a
+# different tree but the IANA name after zoneinfo/ is the same). Appends to
+# ENV_LITERAL so it flows through the engine's env loop. podman branch only.
+agent::derive_tz() {
+  local tz
+  tz=$(readlink "/etc/localtime" 2>/dev/null | sed -n 's#.*/zoneinfo/##p') || true
+  [[ -n "${tz}" ]] && ENV_LITERAL+=("TZ=${tz}")
+  return 0
+}
+
+# Build the podman run argv (array, no eval) and exec it. Everything is mounted at
+# the SAME host path and HOME is the host's, so the bind tables + AGENT_ENV +
+# AGENT_BIN + PATH are reused verbatim from the bwrap path (--bind a b -> -v a:b,
+# --ro-bind a b -> -v a:b:ro, --setenv K V -> -e K=V). The image is just the
+# read-only rootfs; the toolchain comes from the bound ${AGENT_TOOLS} on PATH.
+agent::run_podman() {
+  local PD=(run -it --rm)
+  # On rootless Linux, map the container user to you so files written to the project
+  # and bound dirs are owned by you (not a subordinate uid). On macOS the podman
+  # machine already maps to your uid; keep-id there is unnecessary.
+  [[ "$(uname -s)" == Linux ]] && PD+=(--userns=keep-id)
+  # Don't let SELinux block the binds, and don't relabel them with :z/:Z (which
+  # would disturb the same dirs the bwrap engine uses).
+  PD+=(--security-opt label=disable)
+  local kv var e m
+  for kv in "${AGENT_ENV[@]}";    do PD+=(-e "${kv}"); done
+  for var in "${ENV_FORWARD[@]}"; do [[ -n "${!var:-}" ]] && PD+=(-e "${var}=${!var}"); done
+  for kv in "${ENV_LITERAL[@]}";  do PD+=(-e "${kv}"); done
+  PD+=(-v "${AGENT_TOOLS}:${AGENT_TOOLS}" -v "${AGENT_CACHE}:${AGENT_CACHE}")
+  PD+=(-v "${APP_DIR}:${APP_DIR}" -w "${APP_DIR}")
+  for e in "${BIND_DIRS[@]}";  do PD+=(-v "${e%%:*}:${e#*:}"); done
+  for e in "${BIND_FILES[@]}"; do PD+=(-v "${e%%:*}:${e#*:}"); done
+  for m in "${VOLUMES[@]}";    do PD+=(-v "${m}:${m}"); done
+  for m in "${RO_VOLUMES[@]}"; do PD+=(-v "${m}:${m}:ro"); done
+  # `--` ends podman's option parsing before the image + command.
+  exec podman "${PD[@]}" -- "${IMAGE}" "${AGENT_BIN}" "${EXTRA_ARGS[@]}"
+}
+
+# Pick the engine, normalise paths, ensure sources + toolchain, then run. Under
+# podman the image must exist before the toolchain install runs inside it.
 agent::launch() {
+  agent::detect_engine
+  [[ "${REBUILD}" == "true" && "${ENGINE}" != "podman" ]] && \
+    echo "Warning: -b (rebuild) applies to the podman engine only; ignoring." >&2
   agent::normalize_paths
   agent::ensure_sources
-  agent::ensure_tools
-  agent::run_bwrap
+  if [[ "${ENGINE}" == "podman" ]]; then
+    agent::derive_tz
+    agent::build_image
+    agent::ensure_tools
+    agent::run_podman
+  else
+    agent::ensure_tools
+    agent::run_bwrap
+  fi
 }
 
 # ---- main: parse flags, then the tool name, then pass the rest verbatim ----
@@ -267,13 +413,17 @@ agent::launch() {
 APP_DIR=$(pwd)
 VOLUMES=()
 RO_VOLUMES=()
+ENGINE=""
+REBUILD=false
 
 # getopts stops at the first non-option token (the tool name).
-while getopts "a:v:r:h" opt; do
+while getopts "a:v:r:t:bh" opt; do
   case ${opt} in
     a) APP_DIR=$OPTARG ;;
     v) VOLUMES+=("$OPTARG") ;;
     r) RO_VOLUMES+=("$OPTARG") ;;
+    t) ENGINE=$OPTARG ;;
+    b) REBUILD=true ;;
     h|?) usage ;;
   esac
 done

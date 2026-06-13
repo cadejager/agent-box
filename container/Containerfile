@@ -1,0 +1,18 @@
+FROM debian:trixie
+
+# Agent Box: the podman engine's read-only rootfs. node, uv, and the agent CLIs are
+# NOT baked in -- they live in the bind-mounted per-user toolchain
+# (~/.local/share/agent-box), installed on first run, so they survive image
+# rebuilds and are the exact same toolchain the bubblewrap engine uses.
+#
+# Packages = what the first-run install script needs (curl/tar/xz/python3 +
+# ca-certificates for TLS) plus what the agents need at runtime (git, a pager,
+# ripgrep, openssh-client for git push over SSH) plus build-essential so agents can
+# compile native npm/python modules -- parity with the bwrap engine, which gets the
+# host's compilers for free via /usr.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl tar xz-utils gzip python3 \
+      git less ripgrep openssh-client \
+      build-essential \
+ && rm -rf /var/lib/apt/lists/*
