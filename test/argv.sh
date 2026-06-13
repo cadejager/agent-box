@@ -101,7 +101,7 @@ common() {
 # shared net. The image is the rootfs, so there are NO system-dir binds here.
 common_podman() {
   has "ARG:run"; has "ARG:--rm"                                   # podman run
-  has "ARG:--userns=keep-id"                                      # files owned by you (rootless Linux)
+  hasnot "ARG:--userns=keep-id"                                   # run as container-root: maps to host user AND keeps $HOME writable
   has "ARG:--security-opt"; has "ARG:label=disable"               # don't let SELinux block the binds
   has "ARG:-e"; has "ARG:HOME=${THOME}"                           # HOME override
   has "ARG:PATH=${TOOLS}/bin:${TOOLS}/node/bin:/usr/bin:/bin"     # toolchain on PATH

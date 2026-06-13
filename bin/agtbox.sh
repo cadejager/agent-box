@@ -284,16 +284,22 @@ agent::install_via_bwrap() {
 # container is itself the isolation. Arch comes from the IMAGE, not the host -- a
 # macOS host is a different OS/arch from the Linux container that runs the toolchain.
 agent::install_via_podman() {
-  local script pair narch goarch
+  local script pair narch goarch kv
   script=$(agent::install_script)
   pair=$(agent::arch_pair "$(podman run --rm "${IMAGE}" uname -m)") || exit 1
   narch="${pair%% *}"; goarch="${pair##* }"
-  local PD=(run --rm)
-  [[ "$(uname -s)" == Linux ]] && PD+=(--userns=keep-id)
-  PD+=(
-    --security-opt label=disable
+  # No --userns=keep-id: rootless podman already maps the container's root to the
+  # invoking host user, so files written to the mounted toolchain are owned by you
+  # AND $HOME is writable -- which opencode's postinstall needs (it runs the freshly
+  # downloaded binary, which mkdir's ~/.local/share/opencode as a self-check).
+  local PD=(run --rm --security-opt label=disable
     -v "${AGENT_TOOLS}:${AGENT_TOOLS}"
-    -v "${AGENT_CACHE}:${AGENT_CACHE}"
+    -v "${AGENT_CACHE}:${AGENT_CACHE}")
+  # Same env routing as a real run -- HOME/PATH so npm's `env node` shebang
+  # resolves, and npm/pip/uv cache+prefix pointed at the mounted dirs (else npm
+  # falls back to an unwritable ~/.npm) -- plus the install script's AGT_* inputs.
+  for kv in "${AGENT_ENV[@]}"; do PD+=(-e "${kv}"); done
+  PD+=(
     -e "AGT_TOOLS=${AGENT_TOOLS}"
     -e "AGT_NARCH=${narch}"
     -e "AGT_GOARCH=${goarch}"
@@ -367,14 +373,13 @@ agent::derive_tz() {
 # --ro-bind a b -> -v a:b:ro, --setenv K V -> -e K=V). The image is just the
 # read-only rootfs; the toolchain comes from the bound ${AGENT_TOOLS} on PATH.
 agent::run_podman() {
-  local PD=(run -it --rm)
-  # On rootless Linux, map the container user to you so files written to the project
-  # and bound dirs are owned by you (not a subordinate uid). On macOS the podman
-  # machine already maps to your uid; keep-id there is unnecessary.
-  [[ "$(uname -s)" == Linux ]] && PD+=(--userns=keep-id)
-  # Don't let SELinux block the binds, and don't relabel them with :z/:Z (which
-  # would disturb the same dirs the bwrap engine uses).
-  PD+=(--security-opt label=disable)
+  # No --userns=keep-id: rootless podman maps the container's root to the invoking
+  # host user, so files the agent writes (project + bound dirs) are owned by you and
+  # $HOME is writable. (keep-id would map you to uid 1000 inside, leaving $HOME's
+  # auto-created mount parents root-owned and unwritable -- which breaks tools that
+  # touch an unbound path under $HOME.) label=disable so SELinux doesn't block the
+  # binds (and we don't relabel the shared dirs with :z/:Z).
+  local PD=(run -it --rm --security-opt label=disable)
   local kv var e m
   for kv in "${AGENT_ENV[@]}";    do PD+=(-e "${kv}"); done
   for var in "${ENV_FORWARD[@]}"; do [[ -n "${!var:-}" ]] && PD+=(-e "${var}=${!var}"); done
