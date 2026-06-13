@@ -62,6 +62,8 @@ Session handling is just each tool's native syntax, after `--`: claude `--contin
 
 `AGTBOX_REINSTALL=1 ./bin/agtbox.py claude` reinstalls the toolchain in place (it leaves your config and opencode's data alone).
 
+opencode's Exa web search is **off by default** — turn it on by exporting `OPENCODE_ENABLE_EXA=1` (it's forwarded into the sandbox when set). claude and codex are launched with their own search defaults.
+
 ## How it works
 
 - **One self-contained launcher, two engines.** `bin/agtbox.py` constructs a `bwrap …` (or `podman run …`) command as an argv array — no `eval` — and execs it. The tool name only selects the binary; the env and config wiring are identical for every agent and (by design) nearly identical between the two engines — everything is bound at the **same host path**, so the bind tables are shared.

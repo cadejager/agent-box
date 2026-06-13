@@ -425,6 +425,15 @@ class EnvForward(LauncherTest):
         self.assertEqual(rc, 0, err)
         self.assertNoArg(argv, "ANTHROPIC_API_KEY")
 
+    def test_opencode_search_off_by_default_on_when_exported(self):
+        # opencode's Exa web search is forwarded, not always-on: off unless you set it.
+        _, off, _ = self.launch("-t", "bwrap", "-a", str(self.app), "opencode",
+                                env_add={"OPENCODE_ENABLE_EXA": None})
+        self.assertNoArg(off, "OPENCODE_ENABLE_EXA")
+        _, on, _ = self.launch("-t", "bwrap", "-a", str(self.app), "opencode",
+                               env_add={"OPENCODE_ENABLE_EXA": "1"})
+        self.assertArg(on, "OPENCODE_ENABLE_EXA")
+
     def test_tz_in_podman_argv_not_bwrap(self):
         # bwrap never sets TZ (it inherits host time via the /etc bind).
         _, bw, _ = self.launch("-t", "bwrap", "-a", str(self.app), "claude")
