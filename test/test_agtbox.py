@@ -122,7 +122,7 @@ class LauncherTest(unittest.TestCase):
 class BwrapArgv(LauncherTest):
     def test_locked_down_sandbox(self):
         rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app),
-                                    "-r", str(self.ro), "claude", "--resume", "X")
+                                    "-r", str(self.ro), "claude", "--", "--resume", "X")
         self.assertEqual(rc, 0, err)
         # wiped env + read-only system binds
         self.assertArg(argv, "--clearenv")
@@ -179,7 +179,7 @@ class BwrapArgv(LauncherTest):
 class PodmanArgv(LauncherTest):
     def test_run_argv(self):
         rc, argv, err = self.launch("-t", "podman", "-a", str(self.app),
-                                    "-r", str(self.ro), "opencode", "--session", "Y")
+                                    "-r", str(self.ro), "opencode", "--", "--session", "Y")
         self.assertEqual(rc, 0, err)
         for word in ("run", "-it", "--rm", "--security-opt", "label=disable"):
             self.assertArg(argv, word)
@@ -208,7 +208,7 @@ class PodmanArgv(LauncherTest):
 class Tools(LauncherTest):
     def test_codex_resume_subcommand(self):
         rc, argv, err = self.launch("-a", str(self.app), "-t", "bwrap",
-                                    "codex", "resume", "Z")
+                                    "codex", "--", "resume", "Z")
         self.assertEqual(rc, 0, err)
         self.assertArg(argv, str(self.tools / "bin/codex"))
         self.assertArg(argv, "resume")
@@ -222,20 +222,22 @@ class Tools(LauncherTest):
 
 
 class Passthrough(LauncherTest):
-    def test_dash_leading_tool_arg_passes_through(self):
+    def test_dash_leading_agent_arg_passes_through(self):
+        # everything after `--` reaches the agent verbatim, incl. `-`-leading args
         rc, argv, err = self.launch("-t", "podman", "-a", str(self.app),
-                                    "codex", "--weird-flag")
+                                    "codex", "--", "--weird-flag")
         self.assertEqual(rc, 0, err)
         self.assertArg(argv, "--weird-flag")
 
-    def test_double_dash_separator_consumed(self):
-        # `--` ends launcher options; the tool + its `-`-leading args follow verbatim.
+    def test_double_dash_separates_agent_args(self):
+        # `agtbox <tool> -- <agent args>`: the args after `--` go to the agent.
         rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app),
-                                    "--", "claude", "--resume", "X")
+                                    "claude", "--", "--resume", "X")
         self.assertEqual(rc, 0, err)
-        self.assertArg(argv, str(self.tools / "bin/claude"))
-        self.assertArg(argv, "--resume")
-        self.assertArg(argv, "X")
+        bin_i = argv.index(str(self.tools / "bin/claude"))
+        # the user's `--` is consumed by the split; only --resume X follow the bin
+        # (the `--` present in argv is bwrap's own arg terminator, before the bin)
+        self.assertEqual(argv[bin_i + 1:], ["--resume", "X"])
 
 
 class Volumes(LauncherTest):
@@ -270,37 +272,40 @@ class EngineSelect(LauncherTest):
     def test_clustered_flags(self):
         # -bt podman == -b -t podman
         rc, argv, err = self.launch("-bt", "podman", "-a", str(self.app),
-                                    "opencode", "--session", "Y")
+                                    "opencode", "--", "--session", "Y")
         self.assertEqual(rc, 0, err)
         self.assertArg(argv, "agent-box")          # podman engine
         self.assertArg(argv, str(self.tools / "bin/opencode"))
 
 
 class ErrorCases(LauncherTest):
+    # argparse owns flag/tool/engine validation: usage errors -> stderr, exit 2.
     def test_no_tool(self):
         rc, _, err = self.launch("-t", "bwrap")
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 2)
 
     def test_unknown_tool(self):
         rc, _, err = self.launch("frobnicate")
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 2)
 
     def test_unknown_flag(self):
         rc, _, err = self.launch("-Z", "claude")
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 2)
 
     def test_bad_engine(self):
         rc, _, err = self.launch("-t", "bogus", "claude")
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 2)
 
     def test_missing_optarg(self):
         rc, _, err = self.launch("-t", "bwrap", "-a")  # -a with no value
-        self.assertEqual(rc, 1)
-        self.assertIn("requires an argument", err)
+        self.assertEqual(rc, 2)
+        self.assertIn("expected one argument", err)
 
-    def test_help_exits_one(self):
-        rc, _, _ = self.launch("-h")
-        self.assertEqual(rc, 1)
+    def test_help_exits_zero(self):
+        # argparse: -h prints to stdout and exits 0 (the standard convention).
+        p = self._run(["-h"])
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("usage:", p.stdout.lower())
 
     def test_missing_volume_path(self):
         rc, _, err = self.launch("-t", "bwrap", "-a", str(self.app),
@@ -415,16 +420,15 @@ class NoEngine(LauncherTest):
 
 
 class CollidingFlag(LauncherTest):
-    def test_tool_arg_colliding_with_launcher_flag_passes_through(self):
-        # `-a /x` AFTER the tool goes to the agent verbatim, NOT to the launcher.
+    def test_agent_arg_colliding_with_launcher_flag_passes_through(self):
+        # `-a /x` after `--` goes to the agent verbatim, NOT to the launcher.
         rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app),
-                                    "claude", "-a", "/x")
+                                    "claude", "--", "-a", "/x")
         self.assertEqual(rc, 0, err)
         self.assertArg(argv, "--chdir")
-        self.assertArg(argv, str(self.app))         # project is still -a's pre-tool value
+        self.assertArg(argv, str(self.app))         # project is still the pre-tool -a value
         bin_i = argv.index(str(self.tools / "bin/claude"))
-        self.assertIn("-a", argv[bin_i:])           # -a /x sits after the agent bin
-        self.assertIn("/x", argv[bin_i:])
+        self.assertEqual(argv[bin_i + 1:], ["-a", "/x"])   # -a /x sits after the agent bin
 
 
 # ---- unit tests of the pure helpers (import the module directly) -------------
