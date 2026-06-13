@@ -21,7 +21,6 @@ set -eo pipefail
 AGENT_TOOLS="${HOME}/.local/share/agent-box"   # node, npm, uv, the CLIs, global installs (rw)
 AGENT_CONFIG="${HOME}/.config/agent-box"        # per-tool config (rw)
 AGENT_CACHE="${HOME}/.cache/agent-box"          # npm/pip/uv download caches (rw)
-NODE_VERSION="v24.11.0"                          # pinned toolchain node
 NPM_PKGS=(@anthropic-ai/claude-code opencode-ai @openai/codex)
 
 # Per-tool config wiring: "<subdir under AGENT_CONFIG>:<path under $HOME>". Each
@@ -155,7 +154,8 @@ agent::bwrap_common() {
 
 # Install the toolchain into AGENT_TOOLS from INSIDE a bwrap sandbox (toolchain +
 # cache rw, system ro, $HOME tmpfs) so the official installer scripts can't touch
-# the host. Idempotent: re-running upgrades in place. Needs host curl/tar/xz.
+# the host. Idempotent: re-running upgrades in place. node tracks the latest LTS
+# (resolved from nodejs.org/dist/index.json). Needs host curl/tar/xz/python3.
 agent::install_tools() {
   local arch na
   arch=$(uname -m)
@@ -168,8 +168,11 @@ agent::install_tools() {
   bwrap "${BW[@]}" -- /usr/bin/bash -c "
     set -euo pipefail
     mkdir -p '${AGENT_TOOLS}/node' '${AGENT_TOOLS}/bin'
-    echo 'Agent Box: downloading node ${NODE_VERSION} (${na})...' >&2
-    curl -fsSL 'https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-${na}.tar.xz' \
+    echo 'Agent Box: resolving the latest LTS node...' >&2
+    nv=\$(curl -fsSL https://nodejs.org/dist/index.json | python3 -c 'import json,sys; print(next(r[\"version\"] for r in json.load(sys.stdin) if r[\"lts\"]))')
+    [ -n \"\${nv}\" ] || { echo 'Agent Box: could not resolve the latest LTS node.' >&2; exit 1; }
+    echo \"Agent Box: downloading node \${nv} (${na})...\" >&2
+    curl -fsSL \"https://nodejs.org/dist/\${nv}/node-\${nv}-linux-${na}.tar.xz\" \
       | tar -xJ --strip-components=1 -C '${AGENT_TOOLS}/node'
     echo 'Agent Box: installing agent CLIs...' >&2
     '${AGENT_TOOLS}/node/bin/npm' install -g --prefix '${AGENT_TOOLS}' --cache '${AGENT_CACHE}/npm' \
