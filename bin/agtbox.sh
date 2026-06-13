@@ -37,6 +37,7 @@ BIND_DIRS=(
   "${AGENT_CONFIG}/git:${HOME}/.config/git"
   "${AGENT_CONFIG}/gh:${HOME}/.config/gh"
   "${AGENT_CONFIG}/glab:${HOME}/.config/glab-cli"
+  "${AGENT_CONFIG}/ssh:${HOME}/.ssh"
 )
 # Single config files bound straight in (seeded "{}" if absent -- claude.json must
 # be valid JSON). NB: a *file* bind can't be rewritten via temp+rename (EBUSY on
@@ -120,6 +121,9 @@ agent::ensure_sources() {
   for e in "${BIND_DIRS[@]}"; do
     mkdir -p "${e%%:*}"
   done
+  # ssh refuses keys/config in a group/world-accessible ~/.ssh -- keep the source 0700
+  # so the bind carries through perms ssh will accept (private keys still need 0600).
+  chmod 700 "${AGENT_CONFIG}/ssh"
   for e in "${BIND_FILES[@]}"; do
     f="${e%%:*}"
     mkdir -p "$(dirname "${f}")"
