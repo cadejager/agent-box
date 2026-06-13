@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
-# Argv tests for bin/agtbox.sh (Agent Box: bwrap + podman engines).
+# Argv tests for the Agent Box launcher (bwrap + podman engines).
 #
 # Stubs `bwrap` AND `podman` on PATH so each launch prints the argv it WOULD exec
 # instead of really sandboxing, then asserts the constructed command for both
 # engines. Runs the launcher with a throwaway HOME -- with the toolchain bins
 # pre-created so the one-time (networked) install is skipped, and the podman stub
 # reporting the image already exists so no build runs -- so it stays hermetic and
-# offline. Pure bash. Run: ./test/argv.sh
+# offline. Pure bash.
+#
+# The bash and Python launchers share one interface and build identical argv, so
+# one harness tests both. Defaults to bin/agtbox.sh; set AGTBOX_IMPL to point it
+# elsewhere (both launchers are executable via their shebang):
+#   ./test/argv.sh                      # bin/agtbox.sh
+#   AGTBOX_IMPL=agtbox.py ./test/argv.sh   # bin/agtbox.py
 set -uo pipefail
 unset AGTBOX_REINSTALL
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-AGTBOX="${HERE}/../bin/agtbox.sh"
+AGTBOX="${HERE}/../bin/${AGTBOX_IMPL:-agtbox.sh}"
+[[ -x "${AGTBOX}" ]] || { echo "RESULT: FAILED -- launcher not executable: ${AGTBOX}"; exit 1; }
+echo "== testing ${AGTBOX##*/} =="
 
 STUB=$(mktemp -d)
 TMP=$(realpath "$(mktemp -d)")
@@ -188,5 +196,5 @@ echo "[bad engine] -t bogus exits 1"
 exits 1 -t bogus claude
 
 echo
-if ((rc)); then echo "RESULT: FAILED"; else echo "RESULT: ALL PASSED"; fi
+if ((rc)); then echo "RESULT: FAILED (${AGTBOX##*/})"; else echo "RESULT: ALL PASSED (${AGTBOX##*/})"; fi
 exit "${rc}"

@@ -13,5 +13,9 @@ jobs:
       # shellcheck is preinstalled on the ubuntu-latest runner.
       - name: shellcheck
         run: shellcheck bin/agtbox.sh test/argv.sh
-      - name: argv tests
+      - name: py_compile (python launcher)
+        run: python3 -m py_compile bin/agtbox.py
+      - name: argv tests (bash launcher)
         run: bash test/argv.sh
+      - name: argv tests (python launcher)
+        run: AGTBOX_IMPL=agtbox.py bash test/argv.sh
