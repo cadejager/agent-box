@@ -127,6 +127,55 @@ def _kv(entry):
     return key, val
 
 
+# ---- engine-agnostic arg emitters --------------------------------------------
+# bwrap and podman take the same env/binds in different shapes; these emit either
+# from one source so the two run paths can't drift. style="bwrap" -> --setenv K V
+# / --bind src dst (--ro-bind for read-only); style="podman" -> -e K=V / -v src:dst
+# (:ro for read-only).
+
+def _fmt_env(style, pairs):
+    """Format (key, value) env pairs as launcher args for the given engine style."""
+    args = []
+    for key, val in pairs:
+        args += ["--setenv", key, val] if style == "bwrap" else ["-e", f"{key}={val}"]
+    return args
+
+
+def env_args(style):
+    """The env allowlist both engines apply at run time: AGENT_ENV and ENV_LITERAL
+    always; ENV_FORWARD only for vars actually set on the host (an unset/empty var
+    must not shadow mounted config)."""
+    pairs = [_kv(e) for e in AGENT_ENV]
+    pairs += [(v, os.environ[v]) for v in ENV_FORWARD if os.environ.get(v)]
+    pairs += [_kv(e) for e in ENV_LITERAL]
+    return _fmt_env(style, pairs)
+
+
+def bind_args(style):
+    """The per-tool config binds + extra -v/-r volumes both engines apply (NOT the
+    toolchain/cache/project binds, which are part of each engine's own base). Config
+    dirs/files and -v volumes are read-write; -r volumes read-only."""
+    args = []
+    for e in BIND_DIRS + BIND_FILES:
+        src, dst = _split_pair(e)
+        args += ["--bind", src, dst] if style == "bwrap" else ["-v", f"{src}:{dst}"]
+    for m in VOLUMES:
+        args += ["--bind", m, m] if style == "bwrap" else ["-v", f"{m}:{m}"]
+    for m in RO_VOLUMES:
+        args += ["--ro-bind", m, m] if style == "bwrap" else ["-v", f"{m}:{m}:ro"]
+    return args
+
+
+def _agt_env(narch, goarch):
+    """The AGT_* inputs the install here-doc reads (as (key, value) pairs)."""
+    return [
+        ("AGT_TOOLS", AGENT_TOOLS),
+        ("AGT_NARCH", narch),
+        ("AGT_GOARCH", goarch),
+        ("AGT_NPM_PKGS", " ".join(NPM_PKGS)),
+    ]
+
+
 def usage():
     print(f"Usage: {PROG} [-a DIR] [-v VOL] [-r VOL] [-t podman|bwrap] [-b] [-h] <claude|opencode|codex> [tool args...]")
     print()
@@ -281,16 +330,7 @@ def bwrap_common():
         "--bind", AGENT_CACHE, AGENT_CACHE,
         "--die-with-parent", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
     ]
-    for kv in AGENT_ENV:
-        key, val = _kv(kv)
-        bw += ["--setenv", key, val]
-    for var in ENV_FORWARD:
-        val = os.environ.get(var)
-        if val:
-            bw += ["--setenv", var, val]
-    for kv in ENV_LITERAL:
-        key, val = _kv(kv)
-        bw += ["--setenv", key, val]
+    bw += env_args("bwrap")
     return bw
 
 
@@ -301,12 +341,7 @@ def install_via_bwrap():
     script = install_script()
     narch, goarch = arch_pair(os.uname().machine)
     bw = bwrap_common()
-    bw += [
-        "--setenv", "AGT_TOOLS", AGENT_TOOLS,
-        "--setenv", "AGT_NARCH", narch,
-        "--setenv", "AGT_GOARCH", goarch,
-        "--setenv", "AGT_NPM_PKGS", " ".join(NPM_PKGS),
-    ]
+    bw += _fmt_env("bwrap", _agt_env(narch, goarch))
     subprocess.run(["bwrap", *bw, "--", "/usr/bin/bash", "-c", script], check=True)
 
 
@@ -333,14 +368,8 @@ def install_via_podman():
     # Same env routing as a real run -- HOME/PATH so npm's `env node` shebang
     # resolves, and npm/pip/uv cache+prefix pointed at the mounted dirs (else npm
     # falls back to an unwritable ~/.npm) -- plus the install script's AGT_* inputs.
-    for kv in AGENT_ENV:
-        pd += ["-e", kv]
-    pd += [
-        "-e", f"AGT_TOOLS={AGENT_TOOLS}",
-        "-e", f"AGT_NARCH={narch}",
-        "-e", f"AGT_GOARCH={goarch}",
-        "-e", f"AGT_NPM_PKGS={' '.join(NPM_PKGS)}",
-    ]
+    # (AGENT_ENV only, as the bash does -- not the ENV_FORWARD/ENV_LITERAL allowlist.)
+    pd += _fmt_env("podman", [_kv(e) for e in AGENT_ENV] + _agt_env(narch, goarch))
     subprocess.run(["podman", *pd, "--", IMAGE, "/usr/bin/bash", "-c", script], check=True)
 
 
@@ -369,16 +398,7 @@ def run_bwrap():
     process, like bash `exec`)."""
     bw = bwrap_common()
     bw += ["--bind", APP_DIR, APP_DIR, "--chdir", APP_DIR]
-    for e in BIND_DIRS:
-        src, dst = _split_pair(e)
-        bw += ["--bind", src, dst]
-    for e in BIND_FILES:
-        src, dst = _split_pair(e)
-        bw += ["--bind", src, dst]
-    for m in VOLUMES:
-        bw += ["--bind", m, m]
-    for m in RO_VOLUMES:
-        bw += ["--ro-bind", m, m]
+    bw += bind_args("bwrap")
     # `--` ends bwrap's option parsing, so a `-`-leading tool arg can't be misread.
     argv = ["bwrap", *bw, "--", AGENT_BIN, *EXTRA_ARGS]
     os.execvp("bwrap", argv)
@@ -463,26 +483,10 @@ def run_podman():
     # touch an unbound path under $HOME.) label=disable so SELinux doesn't block the
     # binds (and we don't relabel the shared dirs with :z/:Z).
     pd = ["run", "-it", "--rm", "--security-opt", "label=disable"]
-    for kv in AGENT_ENV:
-        pd += ["-e", kv]
-    for var in ENV_FORWARD:
-        val = os.environ.get(var)
-        if val:
-            pd += ["-e", f"{var}={val}"]
-    for kv in ENV_LITERAL:
-        pd += ["-e", kv]
+    pd += env_args("podman")
     pd += ["-v", f"{AGENT_TOOLS}:{AGENT_TOOLS}", "-v", f"{AGENT_CACHE}:{AGENT_CACHE}"]
     pd += ["-v", f"{APP_DIR}:{APP_DIR}", "-w", APP_DIR]
-    for e in BIND_DIRS:
-        src, dst = _split_pair(e)
-        pd += ["-v", f"{src}:{dst}"]
-    for e in BIND_FILES:
-        src, dst = _split_pair(e)
-        pd += ["-v", f"{src}:{dst}"]
-    for m in VOLUMES:
-        pd += ["-v", f"{m}:{m}"]
-    for m in RO_VOLUMES:
-        pd += ["-v", f"{m}:{m}:ro"]
+    pd += bind_args("podman")
     # `--` ends podman's option parsing before the image + command.
     argv = ["podman", *pd, "--", IMAGE, AGENT_BIN, *EXTRA_ARGS]
     os.execvp("podman", argv)
