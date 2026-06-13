@@ -33,10 +33,12 @@ The **first** launch installs the toolchain (node + `uv` + the three CLIs + `gh`
 ## Usage
 
 ```
-agtbox.py [flags] <claude|opencode|codex> [-- agent args…]
+agtbox.py [flags] <claude|opencode|codex|bash> [-- agent args…]
 ```
 
 Flags come **before** the tool name. To pass arguments to the agent, put them **after a `--` separator** — everything after `--` is forwarded verbatim (the same convention as `cargo run --`, `kubectl exec --`, `env`). A bare `agtbox.py <tool>` needs no `--`. Run `agtbox.py <tool> -- --help` for a tool's own help. `-h` shows the launcher's help.
+
+`bash` is a fourth "tool": it drops you into an interactive shell **inside the sandbox** with the same binds and env, so you can audit/verify the sandbox setup directly (`agtbox.py bash`, or `agtbox.py bash -- -c '…'`) instead of finding the container/namespace and attaching. It runs the system `/usr/bin/bash`.
 
 | Flag | Meaning |
 |------|---------|

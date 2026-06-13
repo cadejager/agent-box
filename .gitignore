@@ -7,3 +7,6 @@ container/certs/*
 
 # Agent worktrees (created by the Agent tool; never commit)
 .claude/worktrees/
+
+# Python bytecode cache
+__pycache__/
