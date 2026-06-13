@@ -24,8 +24,8 @@ AGENT_CACHE="${HOME}/.cache/agent-box"          # npm/pip/uv download caches (rw
 NPM_PKGS=(@anthropic-ai/claude-code opencode-ai @openai/codex)
 
 # Per-tool state wiring: "<host source path>:<path inside the sandbox>". Each host
-# dir/file is bound straight onto the path the tool looks for -- no symlinks.
-# Config/state live under AGENT_CONFIG; the disposable cache under AGENT_CACHE.
+# dir/file is bound straight onto the path the tool looks for. Config/state live
+# under AGENT_CONFIG; the disposable cache under AGENT_CACHE.
 BIND_DIRS=(
   "${AGENT_CONFIG}/claude:${HOME}/.claude"
   "${AGENT_CONFIG}/codex:${HOME}/.codex"
@@ -37,8 +37,7 @@ BIND_DIRS=(
 BIND_FILES=( "${AGENT_CONFIG}/claude.json:${HOME}/.claude.json" )   # seeded "{}" if absent
 
 # Every tool's env, always set (a tool ignores env it doesn't read). ENV_FORWARD
-# is passed through only when set; ENV_LITERAL is always applied. (Host-local time
-# needs no TZ var -- /etc/localtime is visible via the /etc bind.)
+# is passed through only when set; ENV_LITERAL is always applied.
 ENV_FORWARD=(
   ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_AUTH_TOKEN
   OPENAI_API_KEY CODEX_API_KEY

@@ -63,9 +63,8 @@ Session handling is just each tool's native syntax: claude `--continue` / `--res
 - **One self-contained launcher.** `bin/agtbox.sh` constructs a `bwrap …` command (as an argv array — no `eval`) and execs it. The tool name only selects the binary; the sandbox, env, and config wiring are identical for every agent.
 - **Locked-down sandbox.** `/usr`, `/bin`, `/lib`, `/etc`, … are bound **read-only**; `$HOME` and `/tmp` are fresh tmpfs; networking is shared (the agents reach their APIs); and only these are writable, each bound at its real path: your **project**, `~/.config/agent-box`, `~/.cache/agent-box`, `~/.local/share/agent-box`. Nothing else on the host is even visible.
 - **Persistent toolchain + global installs.** `~/.local/share/agent-box` holds node, `uv`, the agent CLIs, the `gh`/`glab` git-hosting CLIs, and anything an agent installs globally (`npm -g`, `pip`, `uv tool` — outside a venv). It persists across runs and is shared between tools, so installs stick around and the CLIs can auto-update. Project dependencies still belong in the project (a `.venv`, `node_modules`, …).
-- **Config, wired straight in.** Each tool's config is bound from `~/.config/agent-box/<tool>` onto the path the tool expects (`~/.claude`, `~/.codex`, opencode's XDG dirs, `~/.claude.json`) — direct binds, no symlinks. One dir to back up or wipe.
+- **Config, wired straight in.** Each tool's config is bound from `~/.config/agent-box/<tool>` onto the path the tool expects (`~/.claude`, `~/.codex`, opencode's XDG dirs, `~/.claude.json`). One dir to back up or wipe.
 - **Download caches** (npm/pip/uv) live in `~/.cache/agent-box` and persist, so re-installs are fast.
-- **Host-local time.** `/etc` is bound read-only, so `/etc/localtime` is visible inside the sandbox and the agent's clock matches the host automatically — no `TZ` needed.
 
 ## Pointing an agent at a local model
 
@@ -73,10 +72,6 @@ Serve the model yourself (e.g. LM Studio), then (these env vars are forwarded in
 
 - **Claude Code** — export `ANTHROPIC_BASE_URL` (and optionally `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_DEFAULT_SONNET_MODEL`).
 - **Codex** — set the endpoint in `~/.config/agent-box/codex/config.toml` (codex ignores `OPENAI_BASE_URL`), or `./bin/agtbox.sh codex --oss --local-provider lmstudio`.
-
-## Corporate CA certs
-
-The sandbox binds your host's `/etc` read-only, so it inherits the **system trust store** automatically. Behind a TLS-intercepting proxy, install your CA into the host once (`/usr/local/share/ca-certificates/your-ca.crt` then `sudo update-ca-certificates`) and the agents will trust it — nothing to rebuild.
 
 ## Layout
 
@@ -95,7 +90,7 @@ CLAUDE.md                 # terse architecture reference (for AI assistants)
 - **The agent can persist only to four places:** the project, `~/.config/agent-box`, `~/.cache/agent-box`, `~/.local/share/agent-box`. Everything else is read-only or an ephemeral tmpfs; global installs persist (and are shared between runs) by design.
 - **What stays *readable*:** `/usr` and `/etc` are bound read-only (needed for the toolchain, DNS, and the CA trust store), so system files there — including things like `/etc/passwd` and host config — are visible to the agent, just not writable. Your home directory, SSH/cloud keys, and the rest of the filesystem are hidden entirely (`$HOME` is an empty tmpfs).
 - **Concurrent runs share** the config/cache/toolchain dirs (so tools see each other's installs); simultaneous installs of the same package could race.
-- **Coming from the old podman/Charliecloud image?** Reclaim it: `podman image rm agent-box` and `rm -rf ~/.cache/podman-ai-agents`. Config in `~/.config/agent-box` carries over.
+- **Coming from the old podman build?** `podman image rm agent-box` reclaims the now-unused image. Config in `~/.config/agent-box` carries over.
 - See [`CLAUDE.md`](CLAUDE.md) for the architecture-level reference.
 
 ## License

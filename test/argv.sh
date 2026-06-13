@@ -44,7 +44,7 @@ exits()  { local want=$1; shift; HOME="${THOME}" "${AGTBOX}" "$@" >/dev/null 2>&
            [[ "${got}" == "${want}" ]] || { echo "  FAIL: exit ${got} != ${want} for: $*"; rc=1; }; }
 
 # Must hold for every tool: locked-down system binds, tmpfs home, persistent
-# toolchain + cache + config binds, env union, shared net, no symlinks/image.
+# toolchain + cache + config binds, env union, shared net.
 common() {
   has "ARG:--ro-bind"                                              # system dirs, read-only
   has "ARG:/usr"; has "ARG:/etc"
