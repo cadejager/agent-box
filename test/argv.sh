@@ -57,7 +57,7 @@ common() {
   has "ARG:${THOME}/.config/agent-box/opencode"; has "ARG:${THOME}/.config/opencode"
   has "ARG:${THOME}/.cache/agent-box/opencode"; has "ARG:${THOME}/.cache/opencode"   # cache from the cache dir
   has "ARG:${THOME}/.config/gh"; has "ARG:${THOME}/.config/glab-cli"   # gh/glab auth dirs
-  has "ARG:${THOME}/.config/git"; has "ARG:GIT_CONFIG_GLOBAL"          # git config dir + write redirect
+  has "ARG:${THOME}/.config/git"; hasnot "ARG:GIT_CONFIG_GLOBAL"       # git: dir bind (no file-bind EBUSY), no redirect
   has "ARG:--clearenv"                                            # wipe host env; --setenv is the allowlist
   has "ARG:--setenv"
   has "ARG:CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"                 # env UNION, every tool

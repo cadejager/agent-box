@@ -36,7 +36,14 @@ BIND_DIRS=(
   "${AGENT_CONFIG}/gh:${HOME}/.config/gh"
   "${AGENT_CONFIG}/glab:${HOME}/.config/glab-cli"
 )
-BIND_FILES=( "${AGENT_CONFIG}/claude.json:${HOME}/.claude.json" )   # seeded "{}" if absent
+# Single config files bound straight in (seeded "{}" if absent -- claude.json must
+# be valid JSON). NB: a *file* bind can't be rewritten via temp+rename (EBUSY on
+# the mountpoint), which is why git uses the ~/.config/git DIR bind above instead.
+BIND_FILES=( "${AGENT_CONFIG}/claude.json:${HOME}/.claude.json" )
+# Empty files seeded INSIDE an already-bound dir (not separately bound), so the
+# tool writes them natively: git only targets ~/.config/git/config for --global
+# writes if it already exists, and its lock+rename then stays inside the bound dir.
+SEED_FILES=( "${AGENT_CONFIG}/git/config" )
 
 # The sandbox runs with --clearenv (see bwrap_common), so ONLY these reach the
 # agent -- a real allowlist, not the host's whole environment (which would leak
@@ -103,8 +110,8 @@ agent::normalize_paths() {
 }
 
 # Create the host-side bind sources so a fresh user can launch: the toolchain +
-# cache dirs, the per-tool config subdirs, and the seed config files (valid empty
-# JSON -- opencode rejects a present-but-invalid file). Never clobbers existing config.
+# cache dirs, the per-tool config dirs, the seed JSON files, and the empty
+# seed-only files (git config). Never clobbers existing config.
 agent::ensure_sources() {
   mkdir -p "${AGENT_TOOLS}" "${AGENT_CACHE}/npm" "${AGENT_CACHE}/pip" "${AGENT_CACHE}/uv"
   local e f
@@ -115,6 +122,10 @@ agent::ensure_sources() {
     f="${e%%:*}"
     mkdir -p "$(dirname "${f}")"
     [[ -e "${f}" ]] || printf '{}' > "${f}"
+  done
+  for f in "${SEED_FILES[@]}"; do
+    mkdir -p "$(dirname "${f}")"
+    [[ -e "${f}" ]] || : > "${f}"
   done
 }
 
@@ -136,7 +147,6 @@ agent::bwrap_common() {
     --die-with-parent  --unshare-pid  --unshare-ipc  --unshare-uts
     --setenv HOME "${HOME}"
     --setenv PATH "${AGENT_TOOLS}/bin:${AGENT_TOOLS}/node/bin:/usr/bin:/bin"
-    --setenv GIT_CONFIG_GLOBAL "${HOME}/.config/git/config"
     --setenv npm_config_prefix "${AGENT_TOOLS}"
     --setenv npm_config_cache "${AGENT_CACHE}/npm"
     --setenv PIP_PREFIX "${AGENT_TOOLS}"
