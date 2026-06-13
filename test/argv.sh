@@ -68,7 +68,7 @@ common() {
   has "ARG:npm_config_prefix"; has "ARG:npm_config_cache"         # installs + caches persist
   # Isolation primitives -- a refactor must not silently drop the sandbox's teeth:
   has "ARG:--dev"; has "ARG:--proc"; has "ARG:--ro-bind-try"      # min /dev, /proc, optional binds
-  has "ARG:/sbin"; has "ARG:/opt"                                 # system dirs ro-bound (incl. /opt)
+  has "ARG:/sbin"; has "ARG:/opt"; has "ARG:/cpe"                 # system dirs ro-bound (incl. /opt, /cpe HPC path)
   has "ARG:--unshare-pid"; has "ARG:--unshare-ipc"; has "ARG:--unshare-uts"
   has "ARG:--die-with-parent"
   hasx "ARG:--"                                                   # bwrap arg terminator

@@ -145,7 +145,7 @@ agent::bwrap_common() {
     --clearenv
     --ro-bind /usr /usr  --ro-bind /etc /etc
     --ro-bind-try /bin /bin     --ro-bind-try /sbin /sbin  --ro-bind-try /lib /lib
-    --ro-bind-try /lib64 /lib64  --ro-bind-try /opt /opt
+    --ro-bind-try /lib64 /lib64  --ro-bind-try /opt /opt  --ro-bind-try /cpe /cpe
     --dev /dev  --proc /proc  --tmpfs /tmp
     --tmpfs "${HOME}"
     --bind "${AGENT_TOOLS}" "${AGENT_TOOLS}"
