@@ -73,12 +73,12 @@ SEED_FILES = [f"{AGENT_CONFIG}/git/config"]
 ENV_FORWARD = [
     "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "OPENAI_API_KEY", "CODEX_API_KEY",
+    "OPENCODE_ENABLE_EXA",   # opencode's Exa web search: off by default, on if you export it
     "TERM", "COLORTERM", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
 ]
 ENV_LITERAL = [
     "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1",
-    "OPENCODE_ENABLE_EXA=1",
     "OPENCODE_EXPERIMENTAL_LSP_TOOL=true",
 ]
 
