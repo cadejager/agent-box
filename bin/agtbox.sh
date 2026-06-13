@@ -36,7 +36,8 @@ CONFIG_DIRS=(
 CONFIG_FILES=( claude.json:.claude.json )       # seeded "{}" if absent; file-bound
 
 # Every tool's env, always set (a tool ignores env it doesn't read). ENV_FORWARD
-# is passed through only when set; ENV_LITERAL is always applied; derive_tz adds TZ.
+# is passed through only when set; ENV_LITERAL is always applied. (Host-local time
+# needs no TZ var -- /etc/localtime is visible via the /etc bind.)
 ENV_FORWARD=(
   ANTHROPIC_BASE_URL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_AUTH_TOKEN
   OPENAI_API_KEY CODEX_API_KEY
@@ -92,14 +93,6 @@ agent::normalize_paths() {
     fi
   done
   RO_VOLUMES=("${kept[@]}")
-}
-
-# Add the host timezone to the env so the sandbox reports local time.
-agent::derive_tz() {
-  local tz=""
-  tz=$(readlink -f /etc/localtime 2>/dev/null | sed -n 's#.*/zoneinfo/##p') || true
-  [[ -n "${tz}" ]] && ENV_LITERAL+=("TZ=${tz}")
-  return 0
 }
 
 # Create the host-side bind sources so a fresh user can launch: the toolchain +
@@ -210,9 +203,8 @@ agent::run_bwrap() {
   exec bwrap "${BW[@]}" -- "${AGENT_BIN}" "${EXTRA_ARGS[@]}"
 }
 
-# Derive TZ, normalise paths, ensure sources + toolchain, then run.
+# Normalise paths, ensure sources + toolchain, then run.
 agent::launch() {
-  agent::derive_tz
   agent::normalize_paths
   agent::ensure_sources
   agent::ensure_tools

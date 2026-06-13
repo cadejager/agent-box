@@ -65,7 +65,7 @@ Session handling is just each tool's native syntax: claude `--continue` / `--res
 - **Persistent toolchain + global installs.** `~/.local/share/agent-box` holds node, `uv`, the CLIs, and anything an agent installs globally (`npm -g`, `pip`, `uv tool` — outside a venv). It persists across runs and is shared between tools, so installs stick around and the CLIs can auto-update. Project dependencies still belong in the project (a `.venv`, `node_modules`, …).
 - **Config, wired straight in.** Each tool's config is bound from `~/.config/agent-box/<tool>` onto the path the tool expects (`~/.claude`, `~/.codex`, opencode's XDG dirs, `~/.claude.json`) — direct binds, no symlinks. One dir to back up or wipe.
 - **Download caches** (npm/pip/uv) live in `~/.cache/agent-box` and persist, so re-installs are fast.
-- **Host-local time.** The launcher derives your host timezone and sets `TZ` so the agent's clock matches the host.
+- **Host-local time.** `/etc` is bound read-only, so `/etc/localtime` is visible inside the sandbox and the agent's clock matches the host automatically — no `TZ` needed.
 
 ## Pointing an agent at a local model
 
