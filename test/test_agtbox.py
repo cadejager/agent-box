@@ -63,8 +63,10 @@ class LauncherTest(unittest.TestCase):
             p = self.stub / engine
             p.write_text(STUB)
             p.chmod(0o755)
-        # Pre-seed the toolchain so ensure_tools() skips the networked install.
-        self.tools = self.home / ".local/share/agent-box"
+        # Pre-seed the toolchain so ensure_tools() skips the networked install. The
+        # toolchain is namespaced by CPU arch (so one shared FS can serve nodes of
+        # different arches); the launcher keys it on os.uname().machine -- seed there.
+        self.tools = self.home / ".local/share/agent-box" / os.uname().machine
         (self.tools / "bin").mkdir(parents=True)
         (self.tools / "node/bin").mkdir(parents=True)
         for b in ("claude", "opencode", "codex", "uv"):
@@ -510,6 +512,19 @@ class Helpers(unittest.TestCase):
 
     def test_split_pair(self):
         self.assertEqual(agtbox._split_pair("/a/b:/c/d"), ("/a/b", "/c/d"))
+
+    def test_toolchain_is_arch_namespaced(self):
+        # One shared filesystem across nodes of different arches must not share the
+        # toolchain (it's arch-specific native binaries); config/state/cache stay
+        # shared (arch-independent), so logins/history/caches follow you across arches.
+        home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        m = load_agtbox(home)
+        arch = os.uname().machine
+        self.assertEqual(m.AGENT_TOOLS, f"{home}/.local/share/agent-box/{arch}")
+        self.assertEqual(m.AGENT_CONFIG, f"{home}/.config/agent-box")
+        self.assertEqual(m.AGENT_STATE, f"{home}/.local/state/agent-box")
+        self.assertEqual(m.AGENT_CACHE, f"{home}/.cache/agent-box")
 
     def test_kv(self):
         self.assertEqual(agtbox._kv("FOO=bar=baz"), ("FOO", "bar=baz"))

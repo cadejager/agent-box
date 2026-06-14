@@ -29,7 +29,16 @@ if not HOME:
 # toolchain plus every global install the agents make live here and persist
 # across runs; the rest of $HOME is an empty tmpfs inside the sandbox, so the
 # agents can only write to these dirs (and the project) -- not the real home.
-AGENT_TOOLS = f"{HOME}/.local/share/agent-box"   # node, npm, uv, the CLIs, global installs (rw)
+# The toolchain is namespaced by CPU arch (.../agent-box/<uname -m>) so ONE shared
+# filesystem can serve nodes of different architectures -- e.g. an HPC cluster whose
+# x86_64 and aarch64 nodes mount the same $HOME. node/uv/the CLIs/gh/glab and every
+# global install are arch-specific native binaries; pip/uv/npm install for the current
+# platform into one flat prefix and don't namespace by arch, so a single shared tree
+# would hand the wrong-arch binaries to the other node (Exec format error). Each arch
+# gets its own toolchain + .stamp here. Config/state/cache below stay un-namespaced --
+# they're arch-independent, so logins/history/caches are shared across arches.
+ARCH = os.uname().machine                                # x86_64, aarch64, ...
+AGENT_TOOLS = f"{HOME}/.local/share/agent-box/{ARCH}"    # node, npm, uv, the CLIs, global installs (rw, per-arch)
 AGENT_CONFIG = f"{HOME}/.config/agent-box"        # per-tool config (rw)
 AGENT_STATE = f"{HOME}/.local/state/agent-box"    # per-tool state (rw)
 AGENT_CACHE = f"{HOME}/.cache/agent-box"          # npm/pip/uv + per-tool caches (rw)
