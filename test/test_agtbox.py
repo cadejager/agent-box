@@ -378,6 +378,15 @@ class InstallTrigger(LauncherTest):
         r2 = self.launch_capture("-t", "bwrap", "-a", str(self.app), "codex")
         self.assertFalse(r2.inst, "a present CLI must not trigger install")
 
+    def test_present_nonexecutable_bin_skips_install(self):
+        # The macOS/podman case: the toolchain persists but the host sees the CLI as
+        # non-executable across the VM mount. Presence is enough -- executability is
+        # the sandbox's concern, not the host's -- so this must NOT reinstall.
+        os.chmod(self.tools / "bin/claude", 0o644)   # present, but no +x
+        r = self.launch_capture("-t", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(r.rc, 0, r.err)
+        self.assertFalse(r.inst, "a present CLI must not reinstall just for lacking +x")
+
 
 class InstallEnv(LauncherTest):
     """The deliberate install-env asymmetry: bwrap install gets the full env

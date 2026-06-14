@@ -368,11 +368,17 @@ def install_tools():
 def ensure_tools():
     """Install the toolchain on first use (or when AGTBOX_REINSTALL=1). The .stamp
     is written only after a fully successful install, so a missing stamp means a
-    fresh or interrupted install and we (re)run; the AGENT_BIN check also re-installs
-    if the requested tool's binary went missing."""
+    fresh or interrupted install and we (re)run; we also re-install if the requested
+    tool's binary is absent.
+
+    That last check is PRESENCE only (`os.path.lexists`): the binary runs inside the
+    sandbox, never on the host, so the host must not test its executability. On macOS
+    the toolchain lives across the podman-machine VM mount, where the host can't
+    follow the npm bin symlink or see its exec bit -- `os.path.isfile`/`os.access(X_OK)`
+    came back false and it reinstalled the toolchain on every single run."""
     if (os.environ.get("AGTBOX_REINSTALL") == "1"
             or not os.path.exists(f"{AGENT_TOOLS}/.stamp")
-            or not (os.path.isfile(AGENT_BIN) and os.access(AGENT_BIN, os.X_OK))):
+            or not os.path.lexists(AGENT_BIN)):
         print(f"Agent Box: setting up the toolchain in {AGENT_TOOLS} (one-time)...", file=sys.stderr)
         install_tools()
 
