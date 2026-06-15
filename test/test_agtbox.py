@@ -531,6 +531,19 @@ class Helpers(unittest.TestCase):
     def test_split_pair(self):
         self.assertEqual(agtbox._split_pair("/a/b:/c/d"), ("/a/b", "/c/d"))
 
+    def test_install_script_aux_tools_best_effort(self):
+        # uv/gh/glab are auxiliary: on a locked-down network their download hosts may
+        # be blocked, so a failure must warn and skip -- not abort the whole install
+        # (which would also skip the .stamp and re-download node every run). node + the
+        # agent CLIs stay required (no warning wrapper). Pin both, and that .stamp is
+        # still written after the best-effort block.
+        s = agtbox.install_script()
+        for tool in ("uv", "gh", "glab"):
+            self.assertIn(f"WARNING -- {tool} install failed", s)
+        self.assertNotIn("WARNING -- node", s)
+        self.assertNotIn("WARNING -- the agent CLIs", s)
+        self.assertLess(s.index("WARNING -- glab"), s.index('date > "${AGT_TOOLS}/.stamp"'))
+
     def test_toolchain_is_arch_namespaced(self):
         # One shared filesystem across nodes of different arches must not share the
         # toolchain (it's arch-specific native binaries); config/state/cache stay
