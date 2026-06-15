@@ -511,6 +511,21 @@ class Helpers(unittest.TestCase):
     def test_split_pair(self):
         self.assertEqual(agtbox._split_pair("/a/b:/c/d"), ("/a/b", "/c/d"))
 
+    def test_no_pep585_subscripted_annotations(self):
+        # `x: list[str]` is a PEP 585 annotation: evaluated at import, needs Python
+        # 3.9+, and crashes older hosts (SLES ships 3.6) with "'type' object is not
+        # subscriptable". The launcher's floor is Python 3.6 (f-strings), and we can't
+        # use `from __future__ import annotations` (3.7+), so NO annotation in the
+        # source may be subscripted. This guards against reintroducing one.
+        import ast
+        tree = ast.parse(AGTBOX.read_text())
+        bad = []
+        for node in ast.walk(tree):
+            ann = getattr(node, "annotation", None)
+            if isinstance(ann, ast.Subscript):
+                bad.append(node.lineno)
+        self.assertEqual(bad, [], f"subscripted annotation(s) at line(s) {bad} break Python 3.6")
+
     def test_kv(self):
         self.assertEqual(agtbox._kv("FOO=bar=baz"), ("FOO", "bar=baz"))
 

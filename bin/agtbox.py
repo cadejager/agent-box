@@ -104,12 +104,12 @@ AGENT_ENV = [
 
 PROG = os.path.basename(sys.argv[0])
 APP_DIR = os.getcwd()
-VOLUMES: list[str] = []
-RO_VOLUMES: list[str] = []
-ENGINE = ""
-REBUILD = False
-TOOL = ""
-EXTRA_ARGS: list[str] = []
+VOLUMES = []        # list[str]; annotated in a comment, not inline -- a bare
+RO_VOLUMES = []     # `list[str]` annotation is PEP 585 (Python 3.9+) and is
+ENGINE = ""         # *evaluated* at import, so it crashes the 3.6/3.7/3.8 pythons
+REBUILD = False     # on older hosts (e.g. SLES) with "'type' object is not
+TOOL = ""           # subscriptable". The launcher's real floor is Python 3.6
+EXTRA_ARGS = []     # (f-strings); keep it that low -- avoid 3.7+ syntax/stdlib.
 AGENT_BIN = ""
 
 
@@ -335,9 +335,11 @@ def install_via_podman():
     a macOS host is a different OS/arch from the Linux container that runs the
     toolchain."""
     script = install_script()
+    # stdout=PIPE + universal_newlines (not capture_output=/text=, which are 3.7+)
+    # so the launcher stays runnable on Python 3.6 hosts.
     container_arch = subprocess.run(
         ["podman", "run", "--rm", IMAGE, "uname", "-m"],
-        check=True, capture_output=True, text=True,
+        check=True, stdout=subprocess.PIPE, universal_newlines=True,
     ).stdout.strip()
     narch, goarch = arch_pair(container_arch)
     # No --userns=keep-id: rootless podman already maps the container's root to the

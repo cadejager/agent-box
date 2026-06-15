@@ -14,7 +14,7 @@ There's no application code here — the "source" is a single Python launcher, `
 ## Requirements
 
 - **An engine:** either **bubblewrap** (`bwrap`) + **unprivileged user namespaces** — the default on most modern Linux, no root/setuid (Debian/Ubuntu: `apt install bubblewrap`) — **or podman** (used automatically when bwrap is absent, e.g. on **macOS**: `brew install podman && podman machine init && podman machine start`). The launcher prefers bwrap when present; force one with `-t podman|bwrap`.
-- **python3** — the launcher itself is a Python 3 script (stdlib only, no third-party packages). Under bwrap, the host also supplies the tools the agents lean on (`git`, `curl`, `tar` during setup; `ripgrep`/`jq`/compilers as projects need them); under podman those come from the image, so the host needs only podman + python3.
+- **python3 (3.6 or newer)** — the launcher itself is a Python 3 script (stdlib only, no third-party packages), and it deliberately sticks to 3.6-compatible syntax so it runs on older corporate/HPC hosts (e.g. SLES). Under bwrap, the host also supplies the tools the agents lean on (`git`, `curl`, `tar` during setup; `ripgrep`/`jq`/compilers as projects need them); under podman those come from the image, so the host needs only podman + python3.
 - Everything else — node, `uv`, and the agent CLIs — is **installed automatically on first run** into `~/.local/share/agent-box` (the same toolchain for both engines). Local-model *serving* is out of scope (run e.g. [LM Studio](https://lmstudio.ai) separately and point an agent at it; see below).
 
 ## Quick start
