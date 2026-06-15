@@ -177,6 +177,16 @@ class BwrapArgv(LauncherTest):
         self.assertNoArg(argv, "--symlink")        # direct binds only
         self.assertNoArg(argv, "GIT_CONFIG_GLOBAL")
 
+    def test_resolv_conf_bound_for_dns(self):
+        # /etc/resolv.conf is often a symlink into /run (systemd-resolved, SLES
+        # netconfig), which dangles in the sandbox and breaks DNS. The launcher binds
+        # the RESOLVED file at its own real path so the symlink in /etc resolves --
+        # realpath(/etc/resolv.conf) is the literal file where it's a plain file, or
+        # the /run target where it's a symlink.
+        rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(rc, 0, err)
+        self.assertArg(argv, os.path.realpath("/etc/resolv.conf"))
+
 
 class PodmanArgv(LauncherTest):
     def test_run_argv(self):

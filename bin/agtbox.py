@@ -312,9 +312,20 @@ def bwrap_common():
     cache (read-write), shared network, and -- starting from a wiped env
     (--clearenv, so no host secrets leak) -- the env (PATH + npm/pip/uv routing into
     the persistent dirs + the env union/allowlist)."""
+    # /etc is bound read-only, but /etc/resolv.conf is commonly a symlink into /run
+    # (systemd-resolved, SLES netconfig) -- and /run is NOT in the sandbox, so the link
+    # dangles and every lookup fails ("Could not resolve host"). Bind the RESOLVED file
+    # at its OWN real path (e.g. /run/netconfig/resolv.conf), NOT onto /etc/resolv.conf:
+    # binding onto the symlink makes bwrap follow it to the missing /run target and die
+    # with "Can't create file at /etc/resolv.conf: No such file or directory". Recreating
+    # the file at its real path instead lets the symlink already inside the bound /etc
+    # resolve. realpath() canonicalises the link; --ro-bind-try skips it if absent on the
+    # host. A plain-file resolv.conf realpaths to /etc/resolv.conf -- a harmless rebind.
+    resolv = os.path.realpath("/etc/resolv.conf")
     bw = [
         "--clearenv",
         "--ro-bind", "/usr", "/usr", "--ro-bind", "/etc", "/etc",
+        "--ro-bind-try", resolv, resolv,
         "--ro-bind-try", "/bin", "/bin", "--ro-bind-try", "/sbin", "/sbin", "--ro-bind-try", "/lib", "/lib",
         "--ro-bind-try", "/lib64", "/lib64", "--ro-bind-try", "/opt", "/opt", "--ro-bind-try", "/cpe", "/cpe",
         "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
