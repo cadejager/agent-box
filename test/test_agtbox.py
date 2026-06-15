@@ -187,6 +187,14 @@ class BwrapArgv(LauncherTest):
         self.assertEqual(rc, 0, err)
         self.assertArg(argv, os.path.realpath("/etc/resolv.conf"))
 
+    def test_ca_store_bound_for_tls(self):
+        # On SLES/openSUSE the CA bundle lives in /var/lib/ca-certificates and the
+        # /etc/ssl symlinks point into it; /var isn't otherwise in the sandbox, so
+        # without this bind HTTPS fails "unable to get local issuer certificate".
+        rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(rc, 0, err)
+        self.assertArg(argv, "/var/lib/ca-certificates")
+
 
 class PodmanArgv(LauncherTest):
     def test_run_argv(self):

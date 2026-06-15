@@ -326,6 +326,13 @@ def bwrap_common():
         "--clearenv",
         "--ro-bind", "/usr", "/usr", "--ro-bind", "/etc", "/etc",
         "--ro-bind-try", resolv, resolv,
+        # Same /etc-symlink-into-an-unbound-dir trap for the TLS trust store: on SLES/
+        # openSUSE the CA bundle lives in /var/lib/ca-certificates and /etc/ssl/{certs,
+        # ca-bundle.pem} are symlinks into it, so without /var the sandbox has NO CAs and
+        # every HTTPS fetch fails "unable to get local issuer certificate". Bind the store
+        # so those symlinks resolve. --ro-bind-try: absent on distros that keep certs under
+        # /etc or /usr (already bound), so it's skipped there.
+        "--ro-bind-try", "/var/lib/ca-certificates", "/var/lib/ca-certificates",
         "--ro-bind-try", "/bin", "/bin", "--ro-bind-try", "/sbin", "/sbin", "--ro-bind-try", "/lib", "/lib",
         "--ro-bind-try", "/lib64", "/lib64", "--ro-bind-try", "/opt", "/opt", "--ro-bind-try", "/cpe", "/cpe",
         "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
