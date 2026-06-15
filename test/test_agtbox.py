@@ -63,8 +63,10 @@ class LauncherTest(unittest.TestCase):
             p = self.stub / engine
             p.write_text(STUB)
             p.chmod(0o755)
-        # Pre-seed the toolchain so ensure_tools() skips the networked install.
-        self.tools = self.home / ".local/share/agent-box"
+        # Pre-seed the toolchain so ensure_tools() skips the networked install. The
+        # toolchain is namespaced by CPU arch (so one shared FS can serve nodes of
+        # different arches); the launcher keys it on os.uname().machine -- seed there.
+        self.tools = self.home / ".local/share/agent-box" / os.uname().machine
         (self.tools / "bin").mkdir(parents=True)
         (self.tools / "node/bin").mkdir(parents=True)
         for b in ("claude", "opencode", "codex", "uv"):
@@ -174,6 +176,24 @@ class BwrapArgv(LauncherTest):
         self.assertNoArg(argv, "--unshare-net")   # network is shared
         self.assertNoArg(argv, "--symlink")        # direct binds only
         self.assertNoArg(argv, "GIT_CONFIG_GLOBAL")
+
+    def test_resolv_conf_bound_for_dns(self):
+        # /etc/resolv.conf is often a symlink into /run (systemd-resolved, SLES
+        # netconfig), which dangles in the sandbox and breaks DNS. The launcher binds
+        # the RESOLVED file at its own real path so the symlink in /etc resolves --
+        # realpath(/etc/resolv.conf) is the literal file where it's a plain file, or
+        # the /run target where it's a symlink.
+        rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(rc, 0, err)
+        self.assertArg(argv, os.path.realpath("/etc/resolv.conf"))
+
+    def test_ca_store_bound_for_tls(self):
+        # On SLES/openSUSE the CA bundle lives in /var/lib/ca-certificates and the
+        # /etc/ssl symlinks point into it; /var isn't otherwise in the sandbox, so
+        # without this bind HTTPS fails "unable to get local issuer certificate".
+        rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(rc, 0, err)
+        self.assertArg(argv, "/var/lib/ca-certificates")
 
 
 class PodmanArgv(LauncherTest):
@@ -510,6 +530,32 @@ class Helpers(unittest.TestCase):
 
     def test_split_pair(self):
         self.assertEqual(agtbox._split_pair("/a/b:/c/d"), ("/a/b", "/c/d"))
+
+    def test_install_script_aux_tools_best_effort(self):
+        # uv/gh/glab are auxiliary: on a locked-down network their download hosts may
+        # be blocked, so a failure must warn and skip -- not abort the whole install
+        # (which would also skip the .stamp and re-download node every run). node + the
+        # agent CLIs stay required (no warning wrapper). Pin both, and that .stamp is
+        # still written after the best-effort block.
+        s = agtbox.install_script()
+        for tool in ("uv", "gh", "glab"):
+            self.assertIn(f"WARNING -- {tool} install failed", s)
+        self.assertNotIn("WARNING -- node", s)
+        self.assertNotIn("WARNING -- the agent CLIs", s)
+        self.assertLess(s.index("WARNING -- glab"), s.index('date > "${AGT_TOOLS}/.stamp"'))
+
+    def test_toolchain_is_arch_namespaced(self):
+        # One shared filesystem across nodes of different arches must not share the
+        # toolchain (it's arch-specific native binaries); config/state/cache stay
+        # shared (arch-independent), so logins/history/caches follow you across arches.
+        home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        m = load_agtbox(home)
+        arch = os.uname().machine
+        self.assertEqual(m.AGENT_TOOLS, f"{home}/.local/share/agent-box/{arch}")
+        self.assertEqual(m.AGENT_CONFIG, f"{home}/.config/agent-box")
+        self.assertEqual(m.AGENT_STATE, f"{home}/.local/state/agent-box")
+        self.assertEqual(m.AGENT_CACHE, f"{home}/.cache/agent-box")
 
     def test_kv(self):
         self.assertEqual(agtbox._kv("FOO=bar=baz"), ("FOO", "bar=baz"))

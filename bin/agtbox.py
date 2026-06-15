@@ -29,7 +29,16 @@ if not HOME:
 # toolchain plus every global install the agents make live here and persist
 # across runs; the rest of $HOME is an empty tmpfs inside the sandbox, so the
 # agents can only write to these dirs (and the project) -- not the real home.
-AGENT_TOOLS = f"{HOME}/.local/share/agent-box"   # node, npm, uv, the CLIs, global installs (rw)
+# The toolchain is namespaced by CPU arch (.../agent-box/<uname -m>) so ONE shared
+# filesystem can serve nodes of different architectures -- e.g. an HPC cluster whose
+# x86_64 and aarch64 nodes mount the same $HOME. node/uv/the CLIs/gh/glab and every
+# global install are arch-specific native binaries; pip/uv/npm install for the current
+# platform into one flat prefix and don't namespace by arch, so a single shared tree
+# would hand the wrong-arch binaries to the other node (Exec format error). Each arch
+# gets its own toolchain + .stamp here. Config/state/cache below stay un-namespaced --
+# they're arch-independent, so logins/history/caches are shared across arches.
+ARCH = os.uname().machine                                # x86_64, aarch64, ...
+AGENT_TOOLS = f"{HOME}/.local/share/agent-box/{ARCH}"    # node, npm, uv, the CLIs, global installs (rw, per-arch)
 AGENT_CONFIG = f"{HOME}/.config/agent-box"        # per-tool config (rw)
 AGENT_STATE = f"{HOME}/.local/state/agent-box"    # per-tool state (rw)
 AGENT_CACHE = f"{HOME}/.cache/agent-box"          # npm/pip/uv + per-tool caches (rw)
@@ -264,22 +273,39 @@ curl -fsSL "https://nodejs.org/dist/${nv}/node-${nv}-linux-${AGT_NARCH}.tar.xz" 
 echo 'Agent Box: installing the agent CLIs...' >&2
 "${AGT_TOOLS}/node/bin/npm" install -g --prefix "${AGT_TOOLS}" --no-fund --no-audit ${AGT_NPM_PKGS}
 
+# node + the agent CLIs above are REQUIRED (fail hard). uv, gh, glab are auxiliary --
+# the agents run without them -- and on locked-down networks their download hosts
+# (astral.sh / github.com / gitlab.com) may be blocked while the node + npm registries
+# are allowed. So install each best-effort: a failure warns and continues instead of
+# aborting the whole toolchain (which would also skip the .stamp below and re-download
+# everything on the next run). Each is an explicit && chain so a mid-step failure stops
+# that tool cleanly; the trailing || records it. Retry later with AGTBOX_REINSTALL=1.
+skipped=
+
 echo 'Agent Box: installing uv...' >&2
-curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="${AGT_TOOLS}/bin" UV_NO_MODIFY_PATH=1 sh
+{ curl -LsSf https://astral.sh/uv/install.sh \
+    | env UV_INSTALL_DIR="${AGT_TOOLS}/bin" UV_NO_MODIFY_PATH=1 sh; } \
+  || { echo 'Agent Box: WARNING -- uv install failed (astral.sh blocked?); skipping.' >&2; skipped="${skipped} uv"; }
 
 echo 'Agent Box: installing gh (GitHub CLI)...' >&2
-gv=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')
-curl -fsSL "https://github.com/cli/cli/releases/download/${gv}/gh_${gv#v}_linux_${AGT_GOARCH}.tar.gz" \
-  | tar -xz -C /tmp
-install -m755 "/tmp/gh_${gv#v}_linux_${AGT_GOARCH}/bin/gh" "${AGT_TOOLS}/bin/gh"
+{ gv=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest \
+       | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])') \
+  && curl -fsSL "https://github.com/cli/cli/releases/download/${gv}/gh_${gv#v}_linux_${AGT_GOARCH}.tar.gz" \
+       | tar -xz -C /tmp \
+  && install -m755 "/tmp/gh_${gv#v}_linux_${AGT_GOARCH}/bin/gh" "${AGT_TOOLS}/bin/gh"; } \
+  || { echo 'Agent Box: WARNING -- gh install failed (github.com blocked?); skipping.' >&2; skipped="${skipped} gh"; }
 
 echo 'Agent Box: installing glab (GitLab CLI)...' >&2
-lv=$(curl -fsSL https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["tag_name"])')
-curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/${lv}/downloads/glab_${lv#v}_linux_${AGT_GOARCH}.tar.gz" \
-  | tar -xz -C /tmp
-install -m755 /tmp/bin/glab "${AGT_TOOLS}/bin/glab"
+{ lv=$(curl -fsSL https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases \
+       | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["tag_name"])') \
+  && curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/${lv}/downloads/glab_${lv#v}_linux_${AGT_GOARCH}.tar.gz" \
+       | tar -xz -C /tmp \
+  && install -m755 /tmp/bin/glab "${AGT_TOOLS}/bin/glab"; } \
+  || { echo 'Agent Box: WARNING -- glab install failed (gitlab.com blocked?); skipping.' >&2; skipped="${skipped} glab"; }
+
+if [ -n "${skipped}" ]; then
+  echo "Agent Box: core toolchain ready; skipped:${skipped} (retry later with AGTBOX_REINSTALL=1)." >&2
+fi
 
 date > "${AGT_TOOLS}/.stamp"
 '''
@@ -303,9 +329,27 @@ def bwrap_common():
     cache (read-write), shared network, and -- starting from a wiped env
     (--clearenv, so no host secrets leak) -- the env (PATH + npm/pip/uv routing into
     the persistent dirs + the env union/allowlist)."""
+    # /etc is bound read-only, but /etc/resolv.conf is commonly a symlink into /run
+    # (systemd-resolved, SLES netconfig) -- and /run is NOT in the sandbox, so the link
+    # dangles and every lookup fails ("Could not resolve host"). Bind the RESOLVED file
+    # at its OWN real path (e.g. /run/netconfig/resolv.conf), NOT onto /etc/resolv.conf:
+    # binding onto the symlink makes bwrap follow it to the missing /run target and die
+    # with "Can't create file at /etc/resolv.conf: No such file or directory". Recreating
+    # the file at its real path instead lets the symlink already inside the bound /etc
+    # resolve. realpath() canonicalises the link; --ro-bind-try skips it if absent on the
+    # host. A plain-file resolv.conf realpaths to /etc/resolv.conf -- a harmless rebind.
+    resolv = os.path.realpath("/etc/resolv.conf")
     bw = [
         "--clearenv",
         "--ro-bind", "/usr", "/usr", "--ro-bind", "/etc", "/etc",
+        "--ro-bind-try", resolv, resolv,
+        # Same /etc-symlink-into-an-unbound-dir trap for the TLS trust store: on SLES/
+        # openSUSE the CA bundle lives in /var/lib/ca-certificates and /etc/ssl/{certs,
+        # ca-bundle.pem} are symlinks into it, so without /var the sandbox has NO CAs and
+        # every HTTPS fetch fails "unable to get local issuer certificate". Bind the store
+        # so those symlinks resolve. --ro-bind-try: absent on distros that keep certs under
+        # /etc or /usr (already bound), so it's skipped there.
+        "--ro-bind-try", "/var/lib/ca-certificates", "/var/lib/ca-certificates",
         "--ro-bind-try", "/bin", "/bin", "--ro-bind-try", "/sbin", "/sbin", "--ro-bind-try", "/lib", "/lib",
         "--ro-bind-try", "/lib64", "/lib64", "--ro-bind-try", "/opt", "/opt", "--ro-bind-try", "/cpe", "/cpe",
         "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
