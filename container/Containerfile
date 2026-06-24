@@ -11,7 +11,7 @@ FROM debian:trixie
 # compile native npm/python modules -- parity with the bwrap engine, which gets the
 # host's compilers for free via /usr.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends \
+ && apt-get install -y jq \
       ca-certificates curl tar xz-utils gzip python3 \
       git less ripgrep openssh-client \
       build-essential \
