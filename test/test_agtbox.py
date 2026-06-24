@@ -21,6 +21,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import mock_open
 from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
@@ -194,6 +195,17 @@ class BwrapArgv(LauncherTest):
         rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app), "claude")
         self.assertEqual(rc, 0, err)
         self.assertArg(argv, "/var/lib/ca-certificates")
+
+    def test_synthetic_identity_bound(self):
+        # To support LDAP-backed users, we generate synthetic passwd/group files
+        # in AGENT_STATE and bind them over /etc/passwd and /etc/group.
+        rc, argv, err = self.launch("-t", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(rc, 0, err)
+        # must be bound AFTER the general /etc bind to overlay
+        self.assertArg(argv, f"{self.home}/.local/state/agent-box/passwd")
+        self.assertArg(argv, "/etc/passwd")
+        self.assertArg(argv, f"{self.home}/.local/state/agent-box/group")
+        self.assertArg(argv, "/etc/group")
 
 
 class PodmanArgv(LauncherTest):
@@ -610,6 +622,102 @@ class EnsureSources(unittest.TestCase):
         (cfg / "claude.json").write_text('{"theme":"dark"}')
         load_agtbox(home).ensure_sources()
         self.assertEqual((cfg / "claude.json").read_text(), '{"theme":"dark"}')
+
+    def test_identity_files_seeded_from_host_and_append_missing_entries(self):
+        home = self._home()
+        m = load_agtbox(home)
+        fake_grp = type("G", (), {})
+        groups = {
+            os.getgid(): fake_grp(),
+        }
+        groups[os.getgid()].gr_name = "primary"
+        groups[os.getgid()].gr_gid = os.getgid()
+        groups[os.getgid()].gr_mem = []
+        groups[os.getgid()].gr_passwd = "x"
+        extra_gid = os.getgid() + 1
+        groups[extra_gid] = fake_grp()
+        groups[extra_gid].gr_name = "extra"
+        groups[extra_gid].gr_gid = extra_gid
+        groups[extra_gid].gr_mem = ["someone"]
+        groups[extra_gid].gr_passwd = "x"
+
+        file_data = {
+            "/etc/passwd": "root:x:0:0::/root:/bin/bash\n",
+            "/etc/group": "root:x:0:\n",
+        }
+        written = {}
+
+        def fake_open(path, mode="r", *args, **kwargs):
+            if "r" in mode:
+                return mock_open(read_data=file_data.get(path, ""))()
+            handle = mock_open()()
+
+            def write(data):
+                written[path] = written.get(path, "") + data
+                return len(data)
+
+            handle.write.side_effect = write
+            return handle
+
+        with mock.patch.object(m, "HOME", str(home)), \
+             mock.patch.object(m.os, "getuid", return_value=26158), \
+             mock.patch.object(m.os, "getgid", return_value=os.getgid()), \
+             mock.patch.object(m.os, "getgroups", return_value=[os.getgid(), extra_gid]), \
+             mock.patch.dict(m.os.environ, {"USER": "dejager", "HOME": str(home), "SHELL": "/bin/bash"}, clear=True), \
+              mock.patch.object(m, "AGENT_STATE", f"{home}/.local/state/agent-box"), \
+              mock.patch.object(m.grp, "getgrgid", side_effect=lambda gid: groups[gid]), \
+              mock.patch("builtins.open", side_effect=fake_open):
+            m.ensure_identity_files()
+
+        passwd_out = written[f"{home}/.local/state/agent-box/passwd"]
+        group_out = written[f"{home}/.local/state/agent-box/group"]
+        self.assertIn("root:x:0:0::/root:/bin/bash", passwd_out)
+        self.assertIn("dejager:x:26158:", passwd_out)
+        self.assertEqual(passwd_out.count("dejager:x:26158:"), 1)
+        self.assertIn("primary:x:", group_out)
+        self.assertIn("extra:x:", group_out)
+
+    def test_identity_files_do_not_duplicate_existing_name_entries(self):
+        home = self._home()
+        m = load_agtbox(home)
+        fake_grp = type("G", (), {})
+        group = fake_grp()
+        group.gr_name = "primary"
+        group.gr_gid = 26158
+        group.gr_mem = []
+        group.gr_passwd = "x"
+
+        file_data = {
+            "/etc/passwd": "dejager:x:26158:26158::/users/dejager:/bin/bash\n",
+            "/etc/group": "primary:x:26158:\n",
+        }
+        written = {}
+
+        def fake_open(path, mode="r", *args, **kwargs):
+            if "r" in mode:
+                return mock_open(read_data=file_data.get(path, ""))()
+            handle = mock_open()()
+
+            def write(data):
+                written[path] = written.get(path, "") + data
+                return len(data)
+
+            handle.write.side_effect = write
+            return handle
+
+        with mock.patch.object(m.os, "getuid", return_value=26158), \
+             mock.patch.object(m.os, "getgid", return_value=26158), \
+             mock.patch.object(m.os, "getgroups", return_value=[26158]), \
+             mock.patch.dict(m.os.environ, {"USER": "dejager", "HOME": str(home), "SHELL": "/bin/bash"}, clear=True), \
+              mock.patch.object(m, "AGENT_STATE", f"{home}/.local/state/agent-box"), \
+              mock.patch.object(m.grp, "getgrgid", return_value=group), \
+              mock.patch("builtins.open", side_effect=fake_open):
+            m.ensure_identity_files()
+
+        passwd_out = written[f"{home}/.local/state/agent-box/passwd"]
+        group_out = written[f"{home}/.local/state/agent-box/group"]
+        self.assertEqual(passwd_out.count("dejager:x:26158:26158::/users/dejager:/bin/bash"), 1)
+        self.assertEqual(group_out.count("primary:x:26158:"), 1)
 
 
 class DeriveTz(unittest.TestCase):

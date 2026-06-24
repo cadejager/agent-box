@@ -14,6 +14,7 @@
 # bash script run INSIDE the sandbox (passed as argv to the engine, not a host shell).
 
 import argparse
+import grp
 import os
 import shutil
 import subprocess
@@ -226,11 +227,57 @@ def normalize_paths():
     RO_VOLUMES = kept
 
 
+def ensure_identity_files():
+    """Generate synthetic passwd/group files in AGENT_STATE for LDAP users.
+    Only append the current user/groups if they are missing from the host files.
+    """
+    os.makedirs(AGENT_STATE, exist_ok=True)
+
+    def sync_file(filename, host_path, current_lines):
+        dst = f"{AGENT_STATE}/{filename}"
+        try:
+            with open(host_path, "r") as f:
+                content = f.read().splitlines()
+        except OSError:
+            content = []
+
+        for line, marker in current_lines:
+            if not any(existing.startswith(f"{marker}:") for existing in content):
+                content.append(line)
+
+        with open(dst, "w") as f:
+            f.write("\n".join(content) + "\n")
+
+    username = os.environ.get("USER") or str(os.getuid())
+    home_dir = os.environ.get("HOME") or HOME
+    shell = os.environ.get("SHELL") or "/bin/bash"
+
+    passwd_lines = [
+        (f"{username}:x:{os.getuid()}:{os.getgid()}::{home_dir}:{shell}", username),
+    ]
+
+    groups = []
+    seen = set()
+    for gid in [os.getgid(), *os.getgroups()]:
+        if gid in seen:
+            continue
+        seen.add(gid)
+        try:
+            group = grp.getgrgid(gid)
+            groups.append((f"{group.gr_name}:x:{group.gr_gid}:{','.join(group.gr_mem)}", group.gr_name))
+        except KeyError:
+            groups.append((f"{gid}:x:{gid}:", str(gid)))
+
+    sync_file("passwd", "/etc/passwd", passwd_lines)
+    sync_file("group", "/etc/group", groups)
+
 def ensure_sources():
     """Create the host-side bind sources so a fresh user can launch: the toolchain +
     cache dirs, the per-tool config dirs, the seed JSON files, and the empty
     seed-only files (git config). Never clobbers existing config."""
+    ensure_identity_files()
     for d in (AGENT_TOOLS, f"{AGENT_CACHE}/npm", f"{AGENT_CACHE}/pip", f"{AGENT_CACHE}/uv"):
+
         os.makedirs(d, exist_ok=True)
     for e in BIND_DIRS:
         os.makedirs(_split_pair(e)[0], exist_ok=True)
@@ -343,6 +390,10 @@ def bwrap_common():
         "--clearenv",
         "--ro-bind", "/usr", "/usr", "--ro-bind", "/etc", "/etc",
         "--ro-bind-try", resolv, resolv,
+        # To support LDAP-backed users, we generate synthetic passwd/group files
+        # and bind them over the read-only /etc/passwd and /etc/group.
+        "--ro-bind", f"{AGENT_STATE}/passwd", "/etc/passwd",
+        "--ro-bind", f"{AGENT_STATE}/group", "/etc/group",
         # Same /etc-symlink-into-an-unbound-dir trap for the TLS trust store: on SLES/
         # openSUSE the CA bundle lives in /var/lib/ca-certificates and /etc/ssl/{certs,
         # ca-bundle.pem} are symlinks into it, so without /var the sandbox has NO CAs and
