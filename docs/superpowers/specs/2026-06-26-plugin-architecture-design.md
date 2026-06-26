@@ -87,6 +87,12 @@ One subclass per isolation mechanism. Required surface:
 - `run(ctx: RunContext)` — assemble the full argv and `os.execvp`.
 - `install(packages, agent, ctx)` — run the install step in isolation (a nested
   `bwrap …` invocation, or `podman run`).
+- `rebuild()` — rebuild the sandbox's container image, if it has one. **Default:
+  no-op.** Called when `-b` is passed. Podman overrides it to rebuild the image
+  (today's `build_image` with the rebuild path); bwrap inherits the no-op (it has
+  no image). This makes `-b` a generic, sandbox-independent flag: a future
+  `docker` sandbox would implement its own `rebuild()`, and bwrap silently does
+  nothing rather than warning.
 
 The `style="bwrap"|"podman"` branching in today's `_fmt_env`/`bind_args`/
 `env_args` is replaced by polymorphism: core builds engine-agnostic
@@ -144,7 +150,8 @@ Stays in core because it belongs to neither axis:
    agent (positional).
 4. Core assembles the `RunContext`: shared binds + generic env, unioned with the
    agent's binds + env and the user's `-w`/`-r` volumes and `-a` project dir.
-5. `sandbox.prepare(ctx)` → `ensure_tools(agent)` → `sandbox.run(ctx)`.
+5. If `-b`: `sandbox.rebuild()`. Then `sandbox.prepare(ctx)` →
+   `ensure_tools(agent, force=update_flag)` → `sandbox.run(ctx)`.
 
 ### Install flow (per-agent lazy)
 
@@ -158,6 +165,18 @@ Stays in core because it belongs to neither axis:
   parameterized by the launched agent's `packages` (reusing the existing
   `AGT_NPM_PKGS` env input). `bash` installs nothing.
 
+### Updating the toolchain (`-u` / `--update`)
+
+`-u` forces a re-run of the install regardless of the `.stamp`/bin presence
+checks: it refreshes the shared toolchain (latest node LTS + uv/gh/glab) **and**
+re-installs the launched agent's `packages`. Updating a different agent is a
+separate `-u <agent>` run, consistent with the per-agent lazy install model.
+
+This **replaces** the `AGTBOX_REINSTALL=1` env var entirely (no users to break,
+and a discoverable flag beats a hidden env var). Internally it sets the same
+"force reinstall" condition `ensure_tools` already checks — just driven by a
+flag instead of `os.environ`.
+
 ## Command-line interface changes
 
 Flags renamed to match the new vocabulary (UI change, explicitly requested):
@@ -168,27 +187,29 @@ Flags renamed to match the new vocabulary (UI change, explicitly requested):
 | `-v <VOL>` | `-w <VOL>` | extra read-write bind (write), repeatable |
 | `-r <VOL>` | `-r <VOL>` | extra read-only bind (read), unchanged |
 | `-a <DIR>` | `-a <DIR>` | project dir, unchanged |
-| `-b` | `-b` | rebuild the podman image (podman only), unchanged |
+| `-b` | `-b` | rebuild the sandbox's image (no-op for sandboxes without one) |
+| `AGTBOX_REINSTALL=1` env | `-u` / `--update` | refresh the toolchain + launched agent's packages |
 | `tool` positional | `agent` positional | the agent to run (or `bash`) |
 
 New usage:
 
 ```
-agtbox.py [-a DIR] [-w VOL] [-r VOL] [-s sandbox] [-b] <agent> [-- agent args...]
+agtbox.py [-a DIR] [-w VOL] [-r VOL] [-s sandbox] [-b] [-u] <agent> [-- agent args...]
 ```
 
 `-s` and the `agent` positional accept dynamically-discovered choices, so
-adding a plugin updates `--help` automatically. (`-b` remains a podman-specific
-flag; if that feels misplaced once more sandboxes exist, factoring per-sandbox
-flags is a follow-up, not part of this work.)
+adding a plugin updates `--help` automatically. `-b` is now sandbox-independent
+(backed by `Sandbox.rebuild()`, default no-op), so it stays valid for any future
+image-based sandbox; under bwrap it does nothing.
 
 ## Behavior parity
 
 A faithful refactor: net observable behavior is unchanged **except** the
-deliberate, requested changes — the renamed flags and the now-dynamic
-`--help`/choices. There are no users yet, so further behavior changes are
-acceptable; any additional *user-interface* change beyond the above will be
-raised before implementing.
+deliberate, requested changes — the renamed flags (`-s`/`-w`), the now-dynamic
+`--help`/choices, `-u`/`--update` replacing `AGTBOX_REINSTALL=1`, and `-b`
+becoming sandbox-independent. There are no users yet, so further behavior
+changes are acceptable; any additional *user-interface* change beyond the above
+will be raised before implementing.
 
 ## Testing
 
@@ -221,4 +242,3 @@ TDD throughout (write/adjust the test, watch it fail, implement):
 - A `docker` sandbox or any new agent (the architecture must *allow* them; this
   work does not add them).
 - Promoting git/gh/glab/ssh into their own plugin kind.
-- Reworking the `-b` flag's placement.
