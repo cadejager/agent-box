@@ -160,17 +160,25 @@ Stays in core because it belongs to neither axis:
 - Each agent's `packages` install lazily, when that agent's `bin` is absent
   (the existing `os.path.lexists(AGENT_BIN)` presence check, now scoped to the
   launched agent).
-- The install bash script splits into two blocks: a shared "core toolchain"
-  block (today's logic, unchanged) and an "npm install $AGT_NPM_PKGS" block
-  parameterized by the launched agent's `packages` (reusing the existing
-  `AGT_NPM_PKGS` env input). `bash` installs nothing.
+- The install splits into two **independently gated** steps: a shared "core
+  toolchain" step (node + uv/gh/glab, today's logic, gated by the `.stamp`) and
+  an "npm install $AGT_NPM_PKGS" step parameterized by the launched agent's
+  `packages` and gated by that agent's `bin` presence. They run independently, so
+  launching a second agent (stamp present, its bin absent) runs **only** the npm
+  step and never re-downloads node.
+- `bash` has empty `packages`, so its npm step is a no-op — but it **still
+  provisions the shared core toolchain** on a fresh machine (the `.stamp` gate is
+  agent-independent). Running `agtbox bash` first installs node/uv/gh/glab and no
+  agent packages, matching today's "first run sets up the toolchain" behavior.
 
 ### Updating the toolchain (`-u` / `--update`)
 
 `-u` forces a re-run of the install regardless of the `.stamp`/bin presence
 checks: it refreshes the shared toolchain (latest node LTS + uv/gh/glab) **and**
-re-installs the launched agent's `packages`. Updating a different agent is a
-separate `-u <agent>` run, consistent with the per-agent lazy install model.
+re-installs the launched agent's `packages`, then launches as usual. It **always
+requires an agent** positional (there is no standalone toolchain-only update
+mode); updating a different agent is a separate `-u <agent>` run, consistent with
+the per-agent lazy install model.
 
 This **replaces** the `AGTBOX_REINSTALL=1` env var entirely (no users to break,
 and a discoverable flag beats a hidden env var). Internally it sets the same
@@ -210,6 +218,41 @@ deliberate, requested changes — the renamed flags (`-s`/`-w`), the now-dynamic
 becoming sandbox-independent. There are no users yet, so further behavior
 changes are acceptable; any additional *user-interface* change beyond the above
 will be raised before implementing.
+
+## Resolved implementation decisions
+
+Captured from a pre-implementation review so the plan has no open questions:
+
+- **`RunContext`** carries: the typed bind list (shared + agent + user `-w`/`-r`,
+  already merged), the resolved env as `(key, value)` pairs (`ENV_FORWARD`
+  resolved against `os.environ` at assembly time), `app_dir`, `extra_args`, and
+  the selected `agent`. `ctx.env` is **mutable**: `Sandbox.prepare()` may append
+  to it (this is how podman injects `TZ` from `derive_tz` — replacing today's
+  mutation of the module-global `ENV_LITERAL`).
+- **`Bind` kinds:** `dir` and `file` both emit a bind arg (file additionally
+  seeds `{}` in `ensure_sources`); `seed` emits **no** bind arg at all — it is an
+  `ensure_sources`-only action (e.g. git's `~/.config/git/config`, written inside
+  the already-bound git dir). The sandbox formatter skips `kind=seed`.
+- **Install env asymmetry preserved:** the bwrap install path carries the full
+  allowlist *including the launched agent's `env_literal`* (via the bwrap base
+  args); the podman install path carries `AGENT_ENV` only. This matches today's
+  tested behavior.
+- **Two-step install gating:** core toolchain gated by `${AGENT_TOOLS}/.stamp`
+  (written last, as today); agent npm packages gated by `os.path.lexists(bin)`
+  (presence only — never `isfile`/`X_OK`, which regresses a real macOS/VM-mount
+  bug). `-u` forces both.
+- **Discovery** yields plugins in a deterministic (sorted-by-name) order so
+  argparse `choices`, `--help`, and bad-choice error text are stable. A plugin
+  module that fails to import aborts with a clear error rather than being silently
+  skipped.
+- **Entry/paths:** `bin/agtbox.py` prepends the repo root to `sys.path` before
+  `from agtbox.cli import main`. `PROJ_DIR` (the `container/` location) is
+  recomputed from the podman module's own `__file__`, not assumed relative to the
+  entry script.
+- **Sandbox resolution errors:** `-s <name>` that is discovered but whose
+  `is_available()` is false → exit 1 ("sandbox 'X' is selected but not
+  installed"); no sandbox available at all → exit 1 ("no sandbox found"). Same
+  exit codes/intent as today's engine checks.
 
 ## Testing
 
