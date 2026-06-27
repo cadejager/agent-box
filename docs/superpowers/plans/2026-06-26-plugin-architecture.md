@@ -60,17 +60,24 @@ Source-of-truth line references below point at the current `bin/agtbox.py` (the 
 - [ ] **Step 1: Write the failing test** — `test/test_core.py`:
 
 ```python
-import importlib, os, tempfile, unittest
+import importlib.util, os, tempfile, unittest
 from pathlib import Path
+import agtbox.core as _canon_core
 
 
 def fresh_core(home):
-    """Import agtbox.core with HOME pointed at a throwaway tree."""
+    """Load a SEPARATE copy of agtbox.core under a throwaway module name with HOME
+    pointed at `home`. Must NOT reload the canonical agtbox.core: agents/sandboxes
+    import `from agtbox import core` and read its constants live, so reloading the
+    real module would leave them pointing at this (soon-deleted) tmp tree. Loading a
+    distinct module name leaves the canonical module untouched."""
     saved = os.environ.get("HOME")
     os.environ["HOME"] = str(home)
     try:
-        import agtbox.core as core
-        return importlib.reload(core)
+        spec = importlib.util.spec_from_file_location("agtbox_core_fresh", _canon_core.__file__)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
     finally:
         if saved is None:
             os.environ.pop("HOME", None)
@@ -331,8 +338,9 @@ SHARED_BINDS = [
 def ensure_sources(binds):
     """Create host-side bind sources so a fresh user can launch. `binds` is the
     full merged list (shared + agent). dir/file -> create the dir; file -> seed
-    '{}' if absent; seed -> create an empty file inside its (already-created) dir."""
-    ensure_identity_files()
+    '{}' if absent; seed -> create an empty file inside its (already-created) dir.
+    NB: synthetic passwd/group identity files are NOT generated here -- they are a
+    bwrap-only concern, generated in Bwrap.prepare (Task 6)."""
     for d in (AGENT_TOOLS, f"{AGENT_CACHE}/npm", f"{AGENT_CACHE}/pip", f"{AGENT_CACHE}/uv"):
         os.makedirs(d, exist_ok=True)
     for b in binds:
@@ -350,7 +358,7 @@ def ensure_sources(binds):
     os.chmod(f"{AGENT_CONFIG}/ssh", 0o700)   # ssh refuses group/world-accessible ~/.ssh
 ```
 
-`ensure_identity_files` is copied unchanged (it already reads `AGENT_STATE`/`HOME` module globals). `normalize_paths(app_dir, volumes, ro_volumes)` returns the realpath'd, existence-checked, dedup'd triple (same logic + messages as lines 207–227, but on parameters; raise `SystemExit` via the existing `sys.exit(1)` on a missing path).
+`ensure_identity_files` is copied unchanged (it already reads `AGENT_STATE`/`HOME` module globals) but is **no longer called by `ensure_sources`** — `Bwrap.prepare` calls it (Task 6). `normalize_paths(app_dir, volumes, ro_volumes)` returns the realpath'd, existence-checked, dedup'd triple (same logic as lines 207–227, but on parameters; raise `SystemExit` via the existing `sys.exit(1)` on a missing path). **Use the new flag names in its warning string** — emit `"... given as both -w (rw) and -r (ro); binding read-write."` (not the old `-v`), so the message is correct from the moment `core.py` is written. The ported integration test asserts this exact string (Task 11a).
 
 - [ ] **Step 4: Run, verify pass**
 
@@ -553,7 +561,7 @@ git commit -m "feat(agents): Agent ABC + claude/opencode/codex/bash plugins"
 
 **Interfaces:**
 - Produces: `context.RunContext` dataclass with fields `agent`, `binds: list[core.Bind]`, `env: list[tuple[str, str]]` (mutable), `app_dir: str`, `volumes: list[str]`, `ro_volumes: list[str]`, `extra_args: list[str]`.
-- Produces: `sandboxes.base.Sandbox` ABC: class attrs `name: str`, `priority: int`; `classmethod is_available() -> bool`; abstract `fmt_env(pairs) -> list[str]`, `fmt_bind(src, dst, ro) -> list[str]`, `build_run_argv(ctx) -> list[str]`, `build_install_argv(script, agent, do_core) -> list[str]`; concrete `prepare(ctx)` (default no-op), `rebuild()` (default no-op), `run(ctx)` (calls `os.execvp` on `build_run_argv`), `install(script, agent, do_core)` (calls `subprocess.run` on `build_install_argv`), and `bind_args(ctx) -> list[str]` (shared helper: maps `ctx.binds` skipping `kind=="seed"`, then `volumes` rw, then `ro_volumes` ro, via `fmt_bind`).
+- Produces: `sandboxes.base.Sandbox` ABC: class attrs `name: str`, `priority: int`, `install_full_env: bool` (default `False` — whether the install runs with the full run env allowlist or `AGENT_ENV` only); `classmethod is_available() -> bool`; abstract `fmt_env(pairs) -> list[str]`, `fmt_bind(src, dst, ro) -> list[str]`, `build_run_argv(ctx) -> list[str]`, `install_machine() -> str` (the `uname -m` of the env the toolchain will run in), `install(script, pairs)` (run the install in isolation with the already-resolved env `pairs`); concrete `prepare(ctx)` (default no-op), `rebuild()` (default no-op), `run(ctx)` (calls `os.execvp` on `build_run_argv`), `bind_args(ctx) -> list[str]` and `env_args(ctx) -> list[str]` (shared formatter helpers). **The sandbox no longer assembles install env or knows install internals** — `install.ensure_tools` resolves the `(k,v)` pairs (honoring `install_full_env`) and the arch, then hands them in. This keeps the bwrap proxy/locale forwards in the install (they flow through the resolved pairs) and removes per-sandbox duplication.
 
 - [ ] **Step 1: Write the failing test** — `test/test_sandboxes.py`:
 
@@ -575,8 +583,10 @@ class FakeSandbox(Sandbox):
         return [f"B:{src}>{dst}{':ro' if ro else ''}"]
     def build_run_argv(self, ctx):
         return ["fake", *self.bind_args(ctx)]
-    def build_install_argv(self, script, agent, do_core):
-        return ["fake-install"]
+    def install_machine(self):
+        return "x86_64"
+    def install(self, script, pairs):
+        pass
 
 
 class BindArgs(unittest.TestCase):
@@ -631,6 +641,7 @@ from abc import ABC, abstractmethod
 class Sandbox(ABC):
     name = ""
     priority = 0
+    install_full_env = False     # True -> install gets the full run env allowlist
 
     @classmethod
     def is_available(cls):
@@ -643,7 +654,9 @@ class Sandbox(ABC):
     @abstractmethod
     def build_run_argv(self, ctx): ...
     @abstractmethod
-    def build_install_argv(self, script, agent, do_core): ...
+    def install_machine(self): ...
+    @abstractmethod
+    def install(self, script, pairs): ...
 
     def prepare(self, ctx):
         pass
@@ -672,11 +685,9 @@ class Sandbox(ABC):
     def run(self, ctx):
         argv = self.build_run_argv(ctx)
         os.execvp(argv[0], argv)
-
-    def install(self, script, agent, do_core):
-        argv = self.build_install_argv(script, agent, do_core)
-        subprocess.run(argv, check=True)
 ```
+
+`subprocess` is still imported (the concrete sandboxes use it). Each sandbox implements `install_machine()` and `install(script, pairs)` itself (Tasks 6, 7).
 
 Create empty `agtbox/sandboxes/__init__.py`.
 
@@ -701,7 +712,7 @@ git commit -m "feat(sandboxes): RunContext + Sandbox ABC with shared bind/env ar
 - Test: `test/test_sandboxes.py`
 
 **Interfaces:**
-- Produces: `sandboxes.bwrap.Bwrap(Sandbox)` — `name="bwrap"`, `priority=20`; `fmt_env` → `["--setenv", k, v]`; `fmt_bind` → `["--ro-bind"|"--bind", src, dst]`; `prepare(ctx)` writes identity files (`core.ensure_identity_files()`); `base_args(ctx)` (the locked-down system binds + tmpfs home + toolchain/cache + env, ported from `bwrap_common`); `build_run_argv(ctx)`; `build_install_argv(script, agent, do_core)`.
+- Produces: `sandboxes.bwrap.Bwrap(Sandbox)` — `name="bwrap"`, `priority=20`, `install_full_env=True`; `fmt_env` → `["--setenv", k, v]`; `fmt_bind` → `["--ro-bind"|"--bind", src, dst]`; `prepare(ctx)` writes identity files (`core.ensure_identity_files()`); `base_args(ctx)` (the locked-down system binds + tmpfs home + toolchain/cache + env, ported from `bwrap_common`); `build_run_argv(ctx)`; `install_machine()` (host `os.uname().machine` — bwrap is Linux-only, host arch == run arch); `install(script, pairs)` (run the install in a nested bwrap with the given resolved env pairs).
 
 - [ ] **Step 1: Write the failing test** — append to `test/test_sandboxes.py`:
 
@@ -726,9 +737,21 @@ class BwrapArgv(unittest.TestCase):
         self.assertNotIn("--unshare-net", argv)       # network shared
         self.assertIn("/app", argv)
         self.assertIn("--chdir", argv)
-        self.assertIn("/usr/bin/bash" if False else "--resume", argv)
         self.assertEqual(argv[-1], "--resume")        # extra args last
         self.assertIn("--setenv", argv)
+
+    def test_install_runs_bwrap_with_given_pairs(self):
+        from unittest import mock
+        from agtbox.sandboxes.bwrap import Bwrap
+        captured = {}
+        with mock.patch("agtbox.sandboxes.bwrap.subprocess.run",
+                        side_effect=lambda argv, **kw: captured.update(argv=argv)):
+            Bwrap().install("SCRIPT", [("HTTPS_PROXY", "http://p"), ("AGT_NPM_PKGS", "x")])
+        argv = captured["argv"]
+        self.assertEqual(argv[0], "bwrap")
+        self.assertIn("HTTPS_PROXY", argv)            # forwarded proxy reaches install
+        self.assertEqual(argv[-3:], ["/usr/bin/bash", "-c", "SCRIPT"])
+        self.assertTrue(Bwrap().install_full_env)
 ```
 
 - [ ] **Step 2: Run, verify failure**
@@ -736,17 +759,20 @@ class BwrapArgv(unittest.TestCase):
 Run: `python3 -m unittest test.test_sandboxes.BwrapArgv -v`
 Expected: FAIL — `ModuleNotFoundError: ... bwrap`.
 
-- [ ] **Step 3: Implement `agtbox/sandboxes/bwrap.py`.** Port `bwrap_common` (lines 373–413) into `base_args(ctx)` — identical body, but: drop the `env_args("bwrap")` call and instead append `self.env_args(ctx)`; the passwd/group binds stay. Port `run_bwrap` (481–489) into `build_run_argv`, and `install_via_bwrap` (416–424) into `build_install_argv`:
+- [ ] **Step 3: Implement `agtbox/sandboxes/bwrap.py`.** Port `bwrap_common` (lines 373–413) into `base_args(ctx)` — identical body, but: drop the `env_args("bwrap")` call and instead append `self.env_args(ctx)`; the passwd/group binds stay. Port `run_bwrap` (481–489) into `build_run_argv`, and `install_via_bwrap` (416–424) into `install`/`install_machine`. The install env is **not** assembled here — `ensure_tools` passes ready `pairs`:
 
 ```python
 import os
+import subprocess
 from agtbox import core
+from agtbox.context import RunContext
 from agtbox.sandboxes.base import Sandbox
 
 
 class Bwrap(Sandbox):
     name = "bwrap"
     priority = 20            # preferred over podman when available
+    install_full_env = True  # install gets the full run env (incl. proxy/locale forwards)
 
     def fmt_env(self, pairs):
         out = []
@@ -787,35 +813,18 @@ class Bwrap(Sandbox):
         bw += self.bind_args(ctx)
         return ["bwrap", *bw, "--", ctx.agent.bin, *ctx.extra_args]
 
-    def build_install_argv(self, script, agent, do_core):
-        from agtbox.install import agt_env
-        bw = self.base_args_for_install()
-        bw += self.fmt_env(agt_env(agent, do_core))
-        return ["bwrap", *bw, "--", "/usr/bin/bash", "-c", script]
+    def install_machine(self):
+        return os.uname().machine        # bwrap is Linux-only: host arch == run arch
 
-    def base_args_for_install(self):
-        # The bwrap install runs with the SAME locked-down base as a real run but
-        # over a minimal context (no project/config binds). Reuse base_args with an
-        # install-only ctx whose env is AGENT_ENV + the launched agent's literals.
-        from agtbox.context import RunContext
-        return self.base_args(RunContext(agent=None, binds=[], env=self._install_env,
-                                         app_dir=core.HOME))
+    def install(self, script, pairs):
+        # Run the install in a nested bwrap with the SAME locked-down base as a real
+        # run, over a minimal context (no project/config binds). `pairs` is already
+        # resolved by ensure_tools (full allowlist for bwrap), so no env assembly here.
+        bw = self.base_args(RunContext(agent=None, binds=[], env=list(pairs), app_dir=core.HOME))
+        subprocess.run(["bwrap", *bw, "--", "/usr/bin/bash", "-c", script], check=True)
 ```
 
-Note: `build_install_argv`/`base_args_for_install` need the install env (AGENT_ENV + the agent's `env_literal`, per the preserved asymmetry). Resolve that in `install.py` (Task 9) and pass it down; here, set `self._install_env` from a parameter. To keep this task self-contained and tested, implement `build_install_argv(self, script, agent, do_core)` to build the install env inline:
-
-```python
-    def build_install_argv(self, script, agent, do_core):
-        from agtbox.install import agt_env
-        pairs = [core._kv(e) for e in core.AGENT_ENV]
-        pairs += [core._kv(e) for e in agent.env_literal]      # bwrap: full-ish allowlist
-        pairs += agt_env(agent, do_core)
-        from agtbox.context import RunContext
-        bw = self.base_args(RunContext(agent=None, binds=[], env=pairs, app_dir=core.HOME))
-        return ["bwrap", *bw, "--", "/usr/bin/bash", "-c", script]
-```
-
-(Delete the `base_args_for_install`/`_install_env` scaffolding above; the inline version is the implementation. `agt_env` is defined in Task 9 — for this task, temporarily define a local `agt_env` stub returning `[("AGT_NPM_PKGS", " ".join(agent.packages))]` and replace the import in Task 9.)
+`base_args` binds `${AGENT_STATE}/passwd|group`; those exist because `prepare` ran (`ensure_identity_files`) before `ensure_tools` in `cli.main`.
 
 - [ ] **Step 4: Run, verify pass**
 
@@ -826,7 +835,7 @@ Expected: PASS.
 
 ```bash
 git add agtbox/sandboxes/bwrap.py test/test_sandboxes.py
-git commit -m "feat(sandboxes): Bwrap sandbox (run + install argv)"
+git commit -m "feat(sandboxes): Bwrap sandbox (run + install)"
 ```
 
 ---
@@ -838,7 +847,7 @@ git commit -m "feat(sandboxes): Bwrap sandbox (run + install argv)"
 - Test: `test/test_sandboxes.py`
 
 **Interfaces:**
-- Produces: `sandboxes.podman.Podman(Sandbox)` — `name="podman"`, `priority=10`; `fmt_env` → `["-e", f"{k}={v}"]`; `fmt_bind` → `["-v", f"{src}:{dst}[:ro]"]`; `PROJ_DIR` (module-level, recomputed from `__file__`); `refresh_certs()`, `build_image()`, `rebuild()`; `prepare(ctx)` → `build_image()` then `derive_tz(ctx)` (appends `("TZ", zone)` to `ctx.env`); `build_run_argv`, `build_install_argv`.
+- Produces: `sandboxes.podman.Podman(Sandbox)` — `name="podman"`, `priority=10`, `install_full_env=False` (install gets `AGENT_ENV` only); `fmt_env` → `["-e", f"{k}={v}"]`; `fmt_bind` → `["-v", f"{src}:{dst}[:ro]"]`; `PROJ_DIR` (module-level, recomputed from `__file__`); `refresh_certs()`, `build_image()`, `rebuild()`; `prepare(ctx)` → `build_image()` then `derive_tz(ctx)` (appends `("TZ", zone)` to `ctx.env`); `build_run_argv`; `install_machine()` (the *container's* `uname -m` via a `podman run` probe — a macOS host is a different arch from the Linux container); `install(script, pairs)`.
 
 - [ ] **Step 1: Write the failing tests** — append to `test/test_sandboxes.py` (migrate `RefreshCerts` + `BuildImage` from `test_agtbox.py`, retargeted to `Podman`, plus a TZ test):
 
@@ -896,6 +905,7 @@ PROJ_DIR = str(Path(__file__).resolve().parents[2])   # .../agtbox/sandboxes/pod
 class Podman(Sandbox):
     name = "podman"
     priority = 10
+    install_full_env = False     # podman install: AGENT_ENV only (matches old behavior)
 
     def fmt_env(self, pairs):
         out = []
@@ -943,20 +953,22 @@ class Podman(Sandbox):
         pd += self.bind_args(ctx)
         return ["podman", *pd, "--", core.IMAGE, ctx.agent.bin, *ctx.extra_args]
 
-    def build_install_argv(self, script, agent, do_core):
-        from agtbox.install import agt_env
-        arch = subprocess.run(["podman", "run", "--rm", core.IMAGE, "uname", "-m"],
+    def install_machine(self):
+        # Arch comes from the IMAGE, not the host: a macOS host differs from the
+        # Linux container that actually runs the toolchain.
+        return subprocess.run(["podman", "run", "--rm", core.IMAGE, "uname", "-m"],
                               check=True, capture_output=True, text=True).stdout.strip()
-        pairs = [core._kv(e) for e in core.AGENT_ENV]          # podman install: AGENT_ENV ONLY
-        pairs += agt_env(agent, do_core, machine=arch)
+
+    def install(self, script, pairs):
+        # `pairs` already resolved by ensure_tools (AGENT_ENV-only for podman).
         pd = ["run", "--rm", "--security-opt", "label=disable",
               "-v", f"{core.AGENT_TOOLS}:{core.AGENT_TOOLS}",
               "-v", f"{core.AGENT_CACHE}:{core.AGENT_CACHE}"]
         pd += self.fmt_env(pairs)
-        return ["podman", *pd, "--", core.IMAGE, "/usr/bin/bash", "-c", script]
+        subprocess.run(["podman", *pd, "--", core.IMAGE, "/usr/bin/bash", "-c", script], check=True)
 ```
 
-(Fill `refresh_certs` with the verbatim body of lines 499–518, using the module `PROJ_DIR`. `agt_env` signature finalized in Task 9 — for now define a local stub matching `agt_env(agent, do_core, machine=None)`.)
+(Fill `refresh_certs` with the verbatim body of lines 499–518, using the module `PROJ_DIR`.)
 
 - [ ] **Step 4: Run, verify pass**
 
@@ -967,7 +979,7 @@ Expected: PASS (all sandbox tests).
 
 ```bash
 git add agtbox/sandboxes/podman.py test/test_sandboxes.py
-git commit -m "feat(sandboxes): Podman sandbox (run/install argv, image, certs, TZ via ctx.env)"
+git commit -m "feat(sandboxes): Podman sandbox (run + install, image, certs, TZ via ctx.env)"
 ```
 
 ---
@@ -1061,8 +1073,8 @@ git commit -m "feat(discovery): sorted runtime discovery of agent/sandbox plugin
 - Test: `test/test_install.py`
 
 **Interfaces:**
-- Produces: `install.install_script() -> str` (two-step: a `${AGT_DO_CORE}`-gated core block + an always-run npm block, `.stamp` written last); `install.agt_env(agent, do_core, machine=None) -> list[tuple[str,str]]` (the `AGT_*` inputs: `AGT_TOOLS`, `AGT_NARCH`, `AGT_GOARCH`, `AGT_NPM_PKGS=" ".join(agent.packages)`, `AGT_DO_CORE`); `install.ensure_tools(agent, sandbox, force) -> None`.
-- Consumes: `core.arch_pair`, `core.AGENT_TOOLS`; `Sandbox.install`.
+- Produces: `install.install_script() -> str` (two-step: a `${AGT_DO_CORE}`-gated core block + an always-run npm block, `.stamp` written last); `install.agt_env(agent, do_core, machine) -> list[tuple[str,str]]` (the `AGT_*` inputs); `install.install_env(agent, sandbox, do_core, machine) -> list[tuple[str,str]]` (the **full resolved install env** — honors `sandbox.install_full_env`); `install.ensure_tools(agent, sandbox, force) -> None`.
+- Consumes: `core.arch_pair`, `core.AGENT_ENV`, `core.resolve_env`; `Sandbox.install_machine`, `Sandbox.install_full_env`, `Sandbox.install`.
 
 - [ ] **Step 1: Write the failing tests** — `test/test_install.py`:
 
@@ -1096,6 +1108,29 @@ class AgtEnv(unittest.TestCase):
         self.assertEqual(pairs["AGT_NARCH"], "arm64")
 
 
+class InstallEnvAsymmetry(unittest.TestCase):
+    """bwrap install gets the full allowlist (incl. proxy/locale forwards + agent
+    literal); podman install gets AGENT_ENV only."""
+
+    def _sandbox(self, full):
+        return type("S", (), {"install_full_env": full})()
+
+    def test_bwrap_full_includes_forward_and_literal(self):
+        import os
+        from agtbox.agents.claude import Claude
+        os.environ["HTTPS_PROXY"] = "http://p"
+        pairs = dict(install.install_env(Claude(), self._sandbox(True), True, "aarch64"))
+        self.assertEqual(pairs["HTTPS_PROXY"], "http://p")            # forward, regression guard
+        self.assertEqual(pairs["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"], "1")  # agent literal
+        self.assertEqual(pairs["AGT_NPM_PKGS"], "@anthropic-ai/claude-code")
+
+    def test_podman_agent_env_only(self):
+        from agtbox.agents.claude import Claude
+        pairs = dict(install.install_env(Claude(), self._sandbox(False), True, "aarch64"))
+        self.assertIn("HOME", pairs)                                  # AGENT_ENV present
+        self.assertNotIn("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", pairs)  # no literal/forward
+
+
 if __name__ == "__main__":
     unittest.main()
 ```
@@ -1105,7 +1140,7 @@ if __name__ == "__main__":
 Run: `python3 -m unittest test.test_install -v`
 Expected: FAIL — `ModuleNotFoundError: ... install`.
 
-- [ ] **Step 3: Implement `agtbox/install.py`.** Port `install_script` (300–358) but wrap the node/uv/gh/glab block in `if [ "${AGT_DO_CORE}" = "1" ]; then … fi`, keep the npm-install line *outside* that gate, and keep `date > "${AGT_TOOLS}/.stamp"` last. Port `_agt_env` (178–185), adding `AGT_DO_CORE`. Port `ensure_tools` (463–478) to the new signature/gating:
+- [ ] **Step 3: Implement `agtbox/install.py`.** Port `install_script` (300–358) but wrap the node/uv/gh/glab block in `if [ "${AGT_DO_CORE}" = "1" ]; then … fi`, keep the npm-install line *outside* that gate, and keep `date > "${AGT_TOOLS}/.stamp"` last. Port `_agt_env` (178–185), adding `AGT_DO_CORE`. Add `install_env` (resolves the per-sandbox install env — this is where the bwrap full-allowlist / podman AGENT_ENV-only asymmetry lives, replacing the old per-engine duplication). Port `ensure_tools` (463–478) to the new signature/gating (it asks the sandbox for the run arch and runs the install with the resolved pairs):
 
 ```python
 import os
@@ -1157,8 +1192,8 @@ date > "${AGT_TOOLS}/.stamp"
 '''
 
 
-def agt_env(agent, do_core, machine=None):
-    narch, goarch = core.arch_pair(machine or os.uname().machine)
+def agt_env(agent, do_core, machine):
+    narch, goarch = core.arch_pair(machine)
     return [
         ("AGT_TOOLS", core.AGENT_TOOLS),
         ("AGT_NARCH", narch),
@@ -1168,19 +1203,32 @@ def agt_env(agent, do_core, machine=None):
     ]
 
 
+def install_env(agent, sandbox, do_core, machine):
+    """Resolve the install env once, here (not in the sandbox). bwrap gets the full
+    run allowlist (so proxy/locale forwards reach the in-sandbox curl); podman gets
+    AGENT_ENV only -- matching the documented asymmetry. Plus the AGT_* inputs."""
+    if sandbox.install_full_env:
+        pairs = list(core.resolve_env(agent.env_forward, agent.env_literal))
+    else:
+        pairs = [core._kv(e) for e in core.AGENT_ENV]
+    return pairs + agt_env(agent, do_core, machine)
+
+
 def ensure_tools(agent, sandbox, force):
     """Install on first use (or -u). Core toolchain gated by .stamp; the launched
-    agent's packages gated by its bin presence (lexists -- presence only)."""
+    agent's packages gated by its bin presence (lexists -- presence only). The
+    sandbox supplies the run arch and runs the install; this fn owns the env."""
     stamp = os.path.exists(f"{core.AGENT_TOOLS}/.stamp")
     bin_present = os.path.lexists(agent.bin)
     if not (force or not stamp or not bin_present):
         return
     print(f"Agent Box: setting up the toolchain in {core.AGENT_TOOLS} (one-time)...", file=sys.stderr)
     do_core = force or not stamp
-    sandbox.install(install_script(), agent, do_core)
+    pairs = install_env(agent, sandbox, do_core, sandbox.install_machine())
+    sandbox.install(install_script(), pairs)
 ```
 
-Now replace the temporary `agt_env` stubs in `bwrap.py` and `podman.py` with `from agtbox.install import agt_env` (already imported there).
+The sandboxes (Tasks 6, 7) already implement `install_machine`/`install` and need no `agt_env` import — the env is fully assembled here and handed in.
 
 - [ ] **Step 4: Run, verify pass**
 
@@ -1199,9 +1247,8 @@ git commit -m "feat(install): two-step install script + per-agent ensure_tools"
 ## Task 10: `cli.main` — dynamic argparse, new flags, dispatch
 
 **Files:**
-- Create: `agtbox/cli.py`
-- Test: covered end-to-end by Task 11 (the ported subprocess suite). Add one direct unit test of resolution here.
-- Test: `test/test_cli.py`
+- Create: `agtbox/cli.py`, `agtbox/__main__.py`
+- Test: `test/test_cli.py` (unit). End-to-end coverage comes in Task 11a via `python3 -m agtbox`.
 
 **Interfaces:**
 - Produces: `cli.main(argv=None)`; `cli.resolve_sandbox(name, sandboxes) -> Sandbox instance` (errors per spec); `cli.build_parser(sandbox_names, agent_names) -> argparse.ArgumentParser`.
@@ -1316,29 +1363,114 @@ def main(argv=None):
     sandbox.run(ctx)
 ```
 
+Also create `agtbox/__main__.py` so the package is runnable as `python3 -m agtbox` (Task 11a tests through this, before the `bin/agtbox.py` shim exists):
+
+```python
+from agtbox.cli import main
+
+main()
+```
+
 - [ ] **Step 4: Run, verify pass**
 
 Run: `python3 -m unittest test.test_cli -v`
 Expected: PASS.
+Also verify the module entry resolves: `PYTHONPATH=. python3 -m agtbox -h` → exit 0, usage shown.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add agtbox/cli.py test/test_cli.py
+git add agtbox/cli.py agtbox/__main__.py test/test_cli.py
 git commit -m "feat(cli): dynamic argparse, sandbox resolution, RunContext dispatch"
 ```
 
 ---
 
-## Task 11: Flip the entry point + port the integration suite green
+## Task 11a: Point the integration suite at the package; migrate/delete old unit tests
+
+The subprocess integration suite is the package's end-to-end safety net. Repoint it at `python3 -m agtbox` (proven before `bin/agtbox.py` is touched), port the flags, and remove the obsolete old-internal unit classes — all while `bin/agtbox.py` stays the old, working file. This task ends green with the package fully exercised; Task 11b's entry-point flip then carries no test risk.
 
 **Files:**
-- Modify: `bin/agtbox.py` (replace with shim)
-- Modify: `test/test_agtbox.py` (port integration flags; migrate identity tests to `test_core.py`; delete obsolete unit-test classes)
-- Modify: `CLAUDE.md`, `README.md`
+- Modify: `test/test_agtbox.py` (repoint harness to the package; port flags; rewrite 2 behavior tests; delete obsolete unit classes)
+- Modify: `test/test_core.py` (receive the migrated identity tests)
 
 **Interfaces:**
-- Consumes: everything built above. Produces: the working CLI at `bin/agtbox.py`.
+- Consumes: `agtbox/__main__.py` (Task 10), the full package. Produces: a green suite running against the package.
+
+- [ ] **Step 1: Repoint the harness at the package.** In `test/test_agtbox.py`, change `_run` to invoke the module instead of the script, with the repo on `PYTHONPATH` so `agtbox` imports regardless of cwd:
+
+```python
+    def _run(self, args, set_home=True, drop_home=False, path=None, env_add=None):
+        env = dict(os.environ)
+        env["PATH"] = path if path is not None else f"{self.stub}:{env['PATH']}"
+        env["PYTHONPATH"] = str(REPO)          # make `-m agtbox` importable
+        if drop_home:
+            env.pop("HOME", None)
+        elif set_home:
+            env["HOME"] = str(self.home)
+        for k, v in (env_add or {}).items():
+            if v is None:
+                env.pop(k, None)
+            else:
+                env[k] = v
+        return subprocess.run([sys.executable, "-m", "agtbox", *args],
+                              capture_output=True, text=True, env=env)
+```
+
+(The old `env.pop("AGTBOX_REINSTALL", None)` line is dropped — that var no longer exists. `AGTBOX = REPO / "bin" / "agtbox.py"` is no longer used by `_run`; leave it for Task 11b's smoke test or delete it.)
+
+- [ ] **Step 2: Port the integration flags** across `test/test_agtbox.py`:
+  - `-t bwrap` → `-s bwrap`, `-t podman` → `-s podman` (every occurrence).
+  - `-v <path>` → `-w <path>` (`Volumes`, `test_v_and_r_distinct_paths`).
+  - `-bt podman` → `-bs podman` (`test_clustered_flags`).
+  - `test_same_path_v_and_r_rw_wins_with_warning`: assertion `"given as both -v (rw) and -r (ro)"` → `"given as both -w (rw) and -r (ro)"`. (The `core.py` message already uses `-w`/`-r` from Task 3 — no code change here.)
+  - `NoEngine.test_no_engine_on_path`: `"no sandbox engine found"` → `"no sandbox found"`.
+
+- [ ] **Step 3: Rewrite the two behavior-changed tests.**
+  - Replace `EngineSelect.test_rebuild_flag_warns_under_bwrap` with:
+
+```python
+    def test_rebuild_noop_under_bwrap(self):
+        rc, argv, err = self.launch("-b", "-s", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("rebuild", err.lower())              # no warning
+        self.assertArg(argv, str(self.tools / "bin/claude"))  # still runs
+```
+
+  - Replace `InstallTrigger.test_reinstall_env_forces_install` with:
+
+```python
+    def test_update_flag_forces_install(self):
+        r = self.launch_capture("-u", "-s", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(r.rc, 0, r.err)
+        self.assertTrue(r.inst, "-u must reinstall despite the stamp")
+```
+
+- [ ] **Step 4: Migrate identity tests, then delete the obsolete block.**
+  - Move `test_identity_files_seeded_from_host_and_append_missing_entries` and `test_identity_files_do_not_duplicate_existing_name_entries` from `test_agtbox.py` into a new `IdentityFiles` class in `test/test_core.py`. Change `m = load_agtbox(home)` → `m = fresh_core(home)`; the bodies/mock targets are otherwise identical (they already patch `m.os`, `m.grp`, `m.AGENT_STATE`, `m.HOME` — all present on the freshly-loaded core module).
+  - Delete from `test_agtbox.py` the trailing unit block (the `importlib` module-load of `agtbox`, `load_agtbox`, and classes `Helpers`, `EnsureSources`, `DeriveTz`, `RefreshCerts`, `BuildImage`). These are replaced by `test_core.py` / `test_sandboxes.py` / `test_install.py`. `test_agtbox.py` is now integration-only.
+
+- [ ] **Step 5: Run the FULL suite, verify green**
+
+Run: `python3 -m unittest discover -s test -v`
+Expected: PASS — integration tests (now `-s`/`-w`/`-u`, hitting the package via `-m agtbox`) plus `test_core`, `test_agents`, `test_sandboxes`, `test_discovery`, `test_install`, `test_cli`. `bin/agtbox.py` (old) is untouched and simply unused by tests.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add test/test_agtbox.py test/test_core.py
+git commit -m "test: run integration suite against the agtbox package; migrate unit tests"
+```
+
+---
+
+## Task 11b: Flip `bin/agtbox.py` to a shim + docs
+
+With the package proven by the suite, replacing the old launcher is now low-risk and observable only via the smoke test.
+
+**Files:**
+- Modify: `bin/agtbox.py` (replace ~647-line file with the shim)
+- Modify: `CLAUDE.md`, `README.md`
 
 - [ ] **Step 1: Replace `bin/agtbox.py` with the shim:**
 
@@ -1356,57 +1488,21 @@ if __name__ == "__main__":
     main()
 ```
 
-Keep it executable (`chmod +x bin/agtbox.py` is preserved by git).
+Keep it executable (git preserves the mode; if needed, `chmod +x bin/agtbox.py`).
 
-- [ ] **Step 2: Port `test/test_agtbox.py` integration classes to the new flags.** Mechanical edits across the file:
-  - `-t bwrap` → `-s bwrap`, `-t podman` → `-s podman` (every occurrence).
-  - `-v <path>` → `-w <path>` (in `Volumes`, `test_v_and_r_distinct_paths`).
-  - `-bt podman` → `-bs podman` (`test_clustered_flags`).
-  - `test_same_path_v_and_r_rw_wins_with_warning`: assertion string `"given as both -v (rw) and -r (ro)"` → `"given as both -w (rw) and -r (ro)"`; update `normalize_paths`' message in `core.py` to match.
-  - `_run`: remove the `env.pop("AGTBOX_REINSTALL", None)` line (the var is gone).
-  - `NoEngine.test_no_engine_on_path`: assertion `"no sandbox engine found"` → `"no sandbox found"`.
+- [ ] **Step 2: Smoke-test the real entry point (no network)**
 
-- [ ] **Step 3: Rewrite the two behavior-changed tests.**
-  - Replace `EngineSelect.test_rebuild_flag_warns_under_bwrap` with:
+Run: `./bin/agtbox.py -h` → Expected: exit 0; usage lists `-s`, `-w`, `-u`, and agents `{bash,claude,codex,opencode}`.
+Run: `./bin/agtbox.py frob` → Expected: exit 2 (bad agent choice).
+Run: `python3 -m unittest discover -s test` → Expected: still PASS (unchanged — tests use `-m agtbox`, but the shim must not regress import).
 
-```python
-    def test_rebuild_noop_under_bwrap(self):
-        rc, argv, err = self.launch("-b", "-s", "bwrap", "-a", str(self.app), "claude")
-        self.assertEqual(rc, 0, err)
-        self.assertNotIn("rebuild", err.lower())             # no warning
-        self.assertArg(argv, str(self.tools / "bin/claude"))  # still runs
-```
+- [ ] **Step 3: Update docs.** In `CLAUDE.md`, rewrite the architecture sections: replace "single self-contained `bin/agtbox.py`" with the package + discovered-plugins model; change `engine`→`sandbox` and `tool`→`agent` vocabulary; update the flag list (`-s`/`-w`/`-u`, generic `-b`); replace "Adding an agent = add to `NPM_PKGS` + BIND tables + argparse choices" with "drop a file in `agtbox/agents/` (subclass `Agent`)"; note `AGTBOX_REINSTALL` is gone (use `-u`). In `README.md`, update usage/flags and add the "fork to extend" story.
 
-  - Replace `InstallTrigger.test_reinstall_env_forces_install` with:
-
-```python
-    def test_update_flag_forces_install(self):
-        r = self.launch_capture("-u", "-s", "bwrap", "-a", str(self.app), "claude")
-        self.assertEqual(r.rc, 0, r.err)
-        self.assertTrue(r.inst, "-u must reinstall despite the stamp")
-```
-
-- [ ] **Step 4: Migrate the surviving unit tests, then delete the obsolete block.**
-  - Move the two identity tests (`test_identity_files_seeded_from_host_and_append_missing_entries`, `test_identity_files_do_not_duplicate_existing_name_entries`) from `test_agtbox.py` into `test/test_core.py`, changing `m = load_agtbox(home)` to `m = fresh_core(home)` and `m.ensure_identity_files` / `m.AGENT_STATE` references to the `core` module (the function bodies and mock targets are otherwise identical).
-  - Delete from `test_agtbox.py` (lines ~512–808): the `importlib` module-load block, `load_agtbox`, and classes `Helpers`, `EnsureSources`, `DeriveTz`, `RefreshCerts`, `BuildImage` — all replaced by `test_core.py` / `test_sandboxes.py` / `test_install.py`. `test_agtbox.py` keeps only the subprocess integration classes.
-
-- [ ] **Step 5: Run the FULL suite, verify green**
-
-Run: `python3 -m unittest discover -s test -v`
-Expected: PASS — all integration tests (now `-s`/`-w`/`-u`) plus `test_core`, `test_agents`, `test_sandboxes`, `test_discovery`, `test_install`, `test_cli`.
-
-- [ ] **Step 6: Smoke-test the real CLI surface (no network)**
-
-Run: `./bin/agtbox.py -h` → Expected: exit 0, usage lists `-s`, `-w`, `-u`, and agents `{bash,claude,codex,opencode}`.
-Run: `./bin/agtbox.py frob` → Expected: exit 2 (bad choice).
-
-- [ ] **Step 7: Update docs.** In `CLAUDE.md`, rewrite the architecture sections: replace "single self-contained `bin/agtbox.py`" with the package + discovered-plugins model; change `engine`→`sandbox` and `tool`→`agent` vocabulary; update the flag list (`-s`/`-w`/`-u`, generic `-b`); replace "Adding an agent = add to NPM_PKGS + BIND tables + argparse choices" with "drop a file in `agtbox/agents/` (subclass `Agent`)"; note `AGTBOX_REINSTALL` is gone (use `-u`). In `README.md`, update usage/flags and the "fork to extend" story.
-
-- [ ] **Step 8: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add bin/agtbox.py test/test_agtbox.py test/test_core.py CLAUDE.md README.md
-git commit -m "feat: flip entry point to agtbox package; port tests + docs to new flags"
+git add bin/agtbox.py CLAUDE.md README.md
+git commit -m "feat: flip bin/agtbox.py to a thin shim over the agtbox package; update docs"
 ```
 
 ---
@@ -1414,9 +1510,11 @@ git commit -m "feat: flip entry point to agtbox package; port tests + docs to ne
 ## Self-Review
 
 **Spec coverage** (each spec section → task):
-- Package layout / shim → Tasks 1, 11. Discovery → Task 8. `Sandbox` ABC (fmt/prepare/run/install/rebuild) → Tasks 5–7. `Agent` ABC (bin/packages/binds/env) → Task 4. Core/shared (paths, generic env, git/gh/glab/ssh, ensure_sources, identity, normalize) → Tasks 1–3. Launcher flow (dynamic argparse, resolve, ctx, dispatch) → Task 10. Per-agent lazy install + two-step script + bash provisions core → Task 9 (`AGT_DO_CORE` gate; npm block always carries `AGT_NPM_PKGS` so `test_missing_stamp_triggers_install` stays green). `-u` replaces env var, requires agent → Tasks 9, 10, 11. `-b` generic `rebuild()` → Tasks 5, 7, 10, 11. CLI flag renames → Tasks 10, 11. Resolved decisions (RunContext mutable env, Bind seed not bound, install env asymmetry, lexists, deterministic discovery, sys.path/PROJ_DIR, sandbox resolution errors) → Tasks 2–10. Testing/docs → Task 11.
-- **Gap check:** the macOS `lexists` test (`test_present_nonexecutable_bin_skips_install`) lives in `InstallTrigger` and is preserved by Task 11's flag port — `ensure_tools` uses `os.path.lexists` (Task 9), so it stays green. ✓
+- Package layout / shim → Tasks 1, 11b. Discovery → Task 8. `Sandbox` ABC (fmt/prepare/run/install/rebuild) → Tasks 5–7. `Agent` ABC (bin/packages/binds/env) → Task 4. Core/shared (paths, generic env, git/gh/glab/ssh, ensure_sources, identity, normalize) → Tasks 1–3. Launcher flow (dynamic argparse, resolve, ctx, dispatch) → Task 10. Per-agent lazy install + two-step script + bash provisions core → Task 9 (`AGT_DO_CORE` gate; npm block always carries `AGT_NPM_PKGS` so `test_missing_stamp_triggers_install` stays green). `-u` replaces env var, requires agent → Tasks 9, 10, 11a. `-b` generic `rebuild()` → Tasks 5, 7, 10, 11a. CLI flag renames → Tasks 10, 11a. Resolved decisions (RunContext mutable env, Bind seed not bound, install env asymmetry, lexists, deterministic discovery, sys.path/PROJ_DIR, sandbox resolution errors) → Tasks 2–10. Testing/docs → Tasks 11a, 11b.
+- **Gap check:** the macOS `lexists` test (`test_present_nonexecutable_bin_skips_install`) lives in `InstallTrigger` and is preserved by Task 11a's flag port — `ensure_tools` uses `os.path.lexists` (Task 9), so it stays green. ✓
 
-**Placeholder scan:** Tasks 6 and 7 use a deliberately-named *temporary* `agt_env` stub, explicitly replaced in Task 9 — flagged, not a silent TODO. `refresh_certs` body in Task 7 says "copied verbatim from current `refresh_certs()`" with the exact source lines (492–518) — a precise port instruction, not a vague placeholder.
+**Placeholder scan:** No stubs. Install-env assembly is centralized in `install.install_env` (Task 9); the sandboxes (Tasks 6, 7) take ready `pairs` and never import install internals. `refresh_certs` body in Task 7 says "copied verbatim from current `refresh_certs()`" with the exact source lines (492–518) — a precise port instruction, not a vague placeholder.
 
-**Type consistency:** `agt_env(agent, do_core, machine=None)` — signature matches across Tasks 6, 7, 9. `Sandbox.build_install_argv(script, agent, do_core)` and `Sandbox.install(script, agent, do_core)` and `ensure_tools(agent, sandbox, force)` are consistent across Tasks 5, 6, 7, 9, 10. `RunContext` field names (`agent`, `binds`, `env`, `app_dir`, `volumes`, `ro_volumes`, `extra_args`) match across Tasks 5, 6, 7, 10. `Bind(src, dst, kind)` consistent across Tasks 1, 3, 4, 5.
+**Post-review revisions (folded in):** (1) install env centralized in `install.install_env`, honoring `Sandbox.install_full_env` — fixes a bwrap-install proxy/locale regression and removes per-sandbox duplication; `test_install.py::InstallEnvAsymmetry` guards it. (2) Identity files generated only in `Bwrap.prepare`, not `core.ensure_sources` (bwrap-only concern). (3) `fresh_core` loads a *separate* module instead of reloading the canonical `agtbox.core` (no cross-test poisoning). (4) `normalize_paths` warning uses `-w`/`-r` from Task 3. (5) Task 11 split into 11a (repoint suite at `python3 -m agtbox`, port flags, green) and 11b (flip the shim + docs) — the cutover carries no test risk because the package is proven via `-m agtbox` before `bin/agtbox.py` changes.
+
+**Type consistency:** `agt_env(agent, do_core, machine)` and `install_env(agent, sandbox, do_core, machine)` match across Task 9; `ensure_tools(agent, sandbox, force)` calls `sandbox.install_machine()` then `sandbox.install(script, pairs)`. The `Sandbox` install surface — abstract `install_machine(self)` and `install(self, script, pairs)` plus class attr `install_full_env` — is consistent across Tasks 5, 6, 7, 9 (no `build_install_argv`, no `agent`/`do_core` on the sandbox). `RunContext` field names (`agent`, `binds`, `env`, `app_dir`, `volumes`, `ro_volumes`, `extra_args`) match across Tasks 5, 6, 7, 10. `Bind(src, dst, kind)` consistent across Tasks 1, 3, 4, 5.
