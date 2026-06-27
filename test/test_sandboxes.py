@@ -1,4 +1,10 @@
+import os
+import shutil
+import tempfile
+import types
 import unittest
+from pathlib import Path
+from unittest import mock
 from agtbox.context import RunContext
 from agtbox.sandboxes.base import Sandbox
 
@@ -70,6 +76,110 @@ class BwrapArgv(unittest.TestCase):
         self.assertIn("HTTPS_PROXY", argv)            # forwarded proxy reaches install
         self.assertEqual(argv[-3:], ["/usr/bin/bash", "-c", "SCRIPT"])
         self.assertTrue(Bwrap().install_full_env)
+
+
+class PodmanArgv(unittest.TestCase):
+    def _ctx(self):
+        from agtbox.context import RunContext
+        from agtbox.core import Bind
+        from agtbox.agents.opencode import Opencode
+        return RunContext(agent=Opencode(), binds=[Bind("/cfg/oc", "/h/.config/opencode")],
+                          env=[("HOME", "/h")], app_dir="/app", volumes=[],
+                          ro_volumes=["/ro"], extra_args=["--session", "Y"])
+
+    def test_run_argv(self):
+        from agtbox.sandboxes.podman import Podman
+        argv = Podman().build_run_argv(self._ctx())
+        for w in ("podman", "run", "-it", "--rm", "--security-opt", "label=disable"):
+            self.assertIn(w, argv)
+        self.assertIn("-e", argv)
+        self.assertIn("HOME=/h", argv)
+        self.assertIn("/cfg/oc:/h/.config/opencode", argv)
+        self.assertIn("/ro:/ro:ro", argv)
+        self.assertIn("agent-box", argv)
+        self.assertEqual(argv[-2:], ["--session", "Y"])
+        self.assertNotIn("--clearenv", argv)
+
+    def test_derive_tz_appends_to_ctx_env(self):
+        from unittest import mock
+        from agtbox.sandboxes.podman import Podman
+        ctx = self._ctx()
+        with mock.patch("agtbox.sandboxes.podman.os.readlink",
+                        return_value="../usr/share/zoneinfo/America/New_York"):
+            Podman().derive_tz(ctx)
+        self.assertIn(("TZ", "America/New_York"), ctx.env)
+
+
+# Migrated from test_agtbox.py, retargeted to Podman. Requires these imports at the
+# top of test/test_sandboxes.py: `import os, shutil, tempfile, types`,
+# `from pathlib import Path`, `from unittest import mock`.
+class RefreshCerts(unittest.TestCase):
+    def setUp(self):
+        from agtbox.sandboxes import podman
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.addCleanup(setattr, podman, "PROJ_DIR", podman.PROJ_DIR)  # never touch the real repo
+        podman.PROJ_DIR = str(self.tmp / "proj")
+        self.dst = self.tmp / "proj/container/certs"
+        self.addCleanup(os.environ.pop, "AGENT_CERTS_DIR", None)
+
+    def test_copies_crt_skips_dotfiles_and_dirs(self):
+        from agtbox.sandboxes.podman import Podman
+        src = self.tmp / "src"
+        (src / "sub").mkdir(parents=True)
+        (src / "company.crt").write_text("x")
+        (src / ".hidden.crt").write_text("x")
+        (src / "sub/nested.crt").write_text("x")
+        os.environ["AGENT_CERTS_DIR"] = str(src)
+        Podman().refresh_certs()
+        self.assertEqual(sorted(p.name for p in self.dst.iterdir()), ["company.crt"])
+
+    def test_missing_source_is_fine(self):
+        from agtbox.sandboxes.podman import Podman
+        os.environ["AGENT_CERTS_DIR"] = str(self.tmp / "nope")
+        Podman().refresh_certs()   # must not raise
+        self.assertTrue(self.dst.is_dir())
+        self.assertEqual(list(self.dst.iterdir()), [])
+
+
+class BuildImage(unittest.TestCase):
+    def setUp(self):
+        from agtbox.sandboxes import podman
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.addCleanup(setattr, podman, "PROJ_DIR", podman.PROJ_DIR)
+        podman.PROJ_DIR = str(self.tmp)                 # refresh_certs writes here, not the repo
+        self.addCleanup(os.environ.pop, "AGENT_CERTS_DIR", None)
+        os.environ["AGENT_CERTS_DIR"] = str(self.tmp / "nocerts")
+
+    def _calls(self, fn, image_present):
+        from agtbox.sandboxes import podman
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append(list(argv))
+            rc = 1 if (argv[:3] == ["podman", "image", "exists"] and not image_present) else 0
+            return types.SimpleNamespace(returncode=rc)
+
+        with mock.patch.object(podman.subprocess, "run", fake_run):
+            fn()
+        return [" ".join(c) for c in calls]
+
+    def test_builds_when_image_absent(self):
+        from agtbox.sandboxes.podman import Podman
+        cmds = self._calls(Podman().build_image, image_present=False)
+        self.assertTrue(any(c.startswith("podman build") for c in cmds))
+
+    def test_skips_build_when_present(self):
+        from agtbox.sandboxes.podman import Podman
+        cmds = self._calls(Podman().build_image, image_present=True)
+        self.assertFalse(any(c.startswith("podman build") for c in cmds))
+
+    def test_rebuild_removes_image_first(self):
+        # rebuild logic now lives in Podman.rebuild(), not build_image().
+        from agtbox.sandboxes.podman import Podman
+        cmds = self._calls(Podman().rebuild, image_present=True)
+        self.assertTrue(any("image rm" in c for c in cmds))
 
 
 if __name__ == "__main__":
