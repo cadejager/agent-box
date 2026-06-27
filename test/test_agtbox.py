@@ -498,5 +498,35 @@ class CollidingFlag(LauncherTest):
         self.assertEqual(argv[bin_i + 1:], ["-a", "/x"])   # -a /x sits after the agent bin
 
 
+class ShimEntryPoint(unittest.TestCase):
+    """The `bin/agtbox.py` shim is the primary human-facing entry point, but the
+    integration tests above invoke `python3 -m agtbox` (the __main__.py path), which
+    does NOT exercise the shim's own `sys.path.insert` bootstrap. Run the script
+    DIRECTLY with PYTHONPATH cleared, so the only thing that can make `import agtbox`
+    succeed is the shim adding the repo root itself."""
+
+    def _run_shim(self, *args):
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)   # the shim must add the repo root on its own
+        # cwd is a tempdir, not the repo: a bare `python3 <script>` puts the script's
+        # own dir (bin/) on sys.path, never cwd, so only the shim's insert can work.
+        return subprocess.run([sys.executable, str(AGTBOX), *args],
+                              capture_output=True, text=True, env=env,
+                              cwd=tempfile.gettempdir())
+
+    def test_help_via_shim(self):
+        p = self._run_shim("-h")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("usage:", p.stdout.lower())
+        for agent in ("bash", "claude", "codex", "opencode"):
+            self.assertIn(agent, p.stdout)         # dynamically-discovered agent choices
+        for flag in ("-s", "-w", "-u"):
+            self.assertIn(flag, p.stdout)          # renamed/new flags surfaced
+
+    def test_bad_agent_via_shim_exits_2(self):
+        p = self._run_shim("frobnicate")
+        self.assertEqual(p.returncode, 2)          # argparse bad-choice, through the shim
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
