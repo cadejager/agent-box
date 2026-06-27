@@ -1,4 +1,4 @@
-import importlib.util, os, tempfile, unittest
+import importlib.util, os, shutil, tempfile, unittest
 from pathlib import Path
 import agtbox.core as _canon_core
 
@@ -66,6 +66,36 @@ class ResolveEnv(unittest.TestCase):
         os.environ["ANTHROPIC_API_KEY"] = "sek"
         pairs = dict(core.resolve_env(["ANTHROPIC_API_KEY"], []))
         self.assertEqual(pairs["ANTHROPIC_API_KEY"], "sek")
+
+
+class EnsureSources(unittest.TestCase):
+    def _home(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        h = tmp / "home"
+        h.mkdir()
+        return h
+
+    def test_creates_dirs_seeds_json_and_git_and_chmods_ssh(self):
+        home = self._home()
+        c = fresh_core(home)
+        cfg = home / ".config/agent-box"
+        binds = [
+            c.Bind(f"{cfg}/claude.json", f"{home}/.claude.json", "file"),
+            c.Bind(f"{cfg}/git/config", f"{home}/.config/git/config", "seed"),
+            *c.SHARED_BINDS,
+        ]
+        c.ensure_sources(binds)
+        self.assertEqual((cfg / "claude.json").read_text(), "{}")
+        self.assertTrue((cfg / "git/config").is_file())
+        self.assertEqual((cfg / "ssh").stat().st_mode & 0o777, 0o700)
+
+    def test_normalize_rw_wins_over_ro_with_warning(self):
+        c = fresh_core(self._home())
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        app, _, ro = c.normalize_paths(str(d), [str(d)], [str(d)])
+        self.assertEqual(ro, [])   # ro dropped because also rw
 
 
 if __name__ == "__main__":
