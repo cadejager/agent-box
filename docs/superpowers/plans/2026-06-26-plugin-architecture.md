@@ -324,8 +324,6 @@ Expected: FAIL — `AttributeError: ... 'SHARED_BINDS'`.
 - [ ] **Step 3: Implement in `agtbox/core.py`.** Add `SHARED_BINDS`; port `ensure_identity_files` (lines 230–272) verbatim; rewrite `ensure_sources` (lines 274–297) to take a `list[Bind]`; port `normalize_paths` (207–227) to take/return params instead of globals:
 
 ```python
-import shutil  # add to imports
-
 SHARED_BINDS = [
     Bind(f"{AGENT_CONFIG}/git", f"{HOME}/.config/git"),
     Bind(f"{AGENT_CONFIG}/gh", f"{HOME}/.config/gh"),
@@ -634,7 +632,6 @@ class RunContext:
 ```python
 import os
 import shutil
-import subprocess
 from abc import ABC, abstractmethod
 
 
@@ -687,7 +684,7 @@ class Sandbox(ABC):
         os.execvp(argv[0], argv)
 ```
 
-`subprocess` is still imported (the concrete sandboxes use it). Each sandbox implements `install_machine()` and `install(script, pairs)` itself (Tasks 6, 7).
+`base.py` itself runs nothing (only `os.execvp` in `run`); each concrete sandbox imports its own `subprocess` and implements `install_machine()` and `install(script, pairs)` (Tasks 6, 7).
 
 Create empty `agtbox/sandboxes/__init__.py`.
 
@@ -882,6 +879,78 @@ class PodmanArgv(unittest.TestCase):
                         return_value="../usr/share/zoneinfo/America/New_York"):
             Podman().derive_tz(ctx)
         self.assertIn(("TZ", "America/New_York"), ctx.env)
+
+
+# Migrated from test_agtbox.py, retargeted to Podman. Requires these imports at the
+# top of test/test_sandboxes.py: `import os, shutil, tempfile, types`,
+# `from pathlib import Path`, `from unittest import mock`.
+class RefreshCerts(unittest.TestCase):
+    def setUp(self):
+        from agtbox.sandboxes import podman
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.addCleanup(setattr, podman, "PROJ_DIR", podman.PROJ_DIR)  # never touch the real repo
+        podman.PROJ_DIR = str(self.tmp / "proj")
+        self.dst = self.tmp / "proj/container/certs"
+        self.addCleanup(os.environ.pop, "AGENT_CERTS_DIR", None)
+
+    def test_copies_crt_skips_dotfiles_and_dirs(self):
+        from agtbox.sandboxes.podman import Podman
+        src = self.tmp / "src"
+        (src / "sub").mkdir(parents=True)
+        (src / "company.crt").write_text("x")
+        (src / ".hidden.crt").write_text("x")
+        (src / "sub/nested.crt").write_text("x")
+        os.environ["AGENT_CERTS_DIR"] = str(src)
+        Podman().refresh_certs()
+        self.assertEqual(sorted(p.name for p in self.dst.iterdir()), ["company.crt"])
+
+    def test_missing_source_is_fine(self):
+        from agtbox.sandboxes.podman import Podman
+        os.environ["AGENT_CERTS_DIR"] = str(self.tmp / "nope")
+        Podman().refresh_certs()   # must not raise
+        self.assertTrue(self.dst.is_dir())
+        self.assertEqual(list(self.dst.iterdir()), [])
+
+
+class BuildImage(unittest.TestCase):
+    def setUp(self):
+        from agtbox.sandboxes import podman
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.addCleanup(setattr, podman, "PROJ_DIR", podman.PROJ_DIR)
+        podman.PROJ_DIR = str(self.tmp)                 # refresh_certs writes here, not the repo
+        self.addCleanup(os.environ.pop, "AGENT_CERTS_DIR", None)
+        os.environ["AGENT_CERTS_DIR"] = str(self.tmp / "nocerts")
+
+    def _calls(self, fn, image_present):
+        from agtbox.sandboxes import podman
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append(list(argv))
+            rc = 1 if (argv[:3] == ["podman", "image", "exists"] and not image_present) else 0
+            return types.SimpleNamespace(returncode=rc)
+
+        with mock.patch.object(podman.subprocess, "run", fake_run):
+            fn()
+        return [" ".join(c) for c in calls]
+
+    def test_builds_when_image_absent(self):
+        from agtbox.sandboxes.podman import Podman
+        cmds = self._calls(Podman().build_image, image_present=False)
+        self.assertTrue(any(c.startswith("podman build") for c in cmds))
+
+    def test_skips_build_when_present(self):
+        from agtbox.sandboxes.podman import Podman
+        cmds = self._calls(Podman().build_image, image_present=True)
+        self.assertFalse(any(c.startswith("podman build") for c in cmds))
+
+    def test_rebuild_removes_image_first(self):
+        # rebuild logic now lives in Podman.rebuild(), not build_image().
+        from agtbox.sandboxes.podman import Podman
+        cmds = self._calls(Podman().rebuild, image_present=True)
+        self.assertTrue(any("image rm" in c for c in cmds))
 ```
 
 - [ ] **Step 2: Run, verify failure**
@@ -895,6 +964,7 @@ Expected: FAIL — `ModuleNotFoundError: ... podman`.
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from agtbox import core
 from agtbox.sandboxes.base import Sandbox
@@ -936,7 +1006,7 @@ class Podman(Sandbox):
     def build_image(self):
         if subprocess.run(["podman", "image", "exists", core.IMAGE]).returncode == 0:
             return
-        print(f"Agent Box: building the {core.IMAGE} image (one-time)...", file=__import__("sys").stderr)
+        print(f"Agent Box: building the {core.IMAGE} image (one-time)...", file=sys.stderr)
         self.refresh_certs()
         subprocess.run(["podman", "build", "-t", core.IMAGE, "-f",
                         f"{PROJ_DIR}/container/Containerfile", f"{PROJ_DIR}/container"], check=True)
@@ -1117,9 +1187,10 @@ class InstallEnvAsymmetry(unittest.TestCase):
 
     def test_bwrap_full_includes_forward_and_literal(self):
         import os
+        from unittest import mock
         from agtbox.agents.claude import Claude
-        os.environ["HTTPS_PROXY"] = "http://p"
-        pairs = dict(install.install_env(Claude(), self._sandbox(True), True, "aarch64"))
+        with mock.patch.dict(os.environ, {"HTTPS_PROXY": "http://p"}):   # no leak into later tests
+            pairs = dict(install.install_env(Claude(), self._sandbox(True), True, "aarch64"))
         self.assertEqual(pairs["HTTPS_PROXY"], "http://p")            # forward, regression guard
         self.assertEqual(pairs["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"], "1")  # agent literal
         self.assertEqual(pairs["AGT_NPM_PKGS"], "@anthropic-ai/claude-code")
@@ -1426,6 +1497,10 @@ The subprocess integration suite is the package's end-to-end safety net. Repoint
   - `test_same_path_v_and_r_rw_wins_with_warning`: assertion `"given as both -v (rw) and -r (ro)"` → `"given as both -w (rw) and -r (ro)"`. (The `core.py` message already uses `-w`/`-r` from Task 3 — no code change here.)
   - `NoEngine.test_no_engine_on_path`: `"no sandbox engine found"` → `"no sandbox found"`.
 
+- [ ] **Step 2b: Scope the two cross-agent bind assertions (REQUIRED — these reds the suite otherwise).** The old global bind table mounted *every* agent's config on every run; the per-agent model mounts only the launched agent's binds + shared git/gh/glab/ssh. Two integration tests assert another agent's binds and must be re-scoped:
+  - `BwrapArgv.test_locked_down_sandbox` launches **claude** but asserts opencode's four XDG dirs (old lines 164–167: `.local/share/opencode`, `.local/state/opencode`, `.cache/opencode`, `.config/opencode`). **Delete that four-line assertion block.** Claude no longer mounts opencode's dirs; opencode's binds are covered by `test_agents` (Task 4) and the podman test below.
+  - `PodmanArgv.test_run_argv` launches **opencode** but asserts claude's binds (old lines 225–226: `{cfg}/claude:{home}/.claude` and `{cfg}/claude.json:{home}/.claude.json`). **Replace those two with opencode's config bind:** `self.assertArg(argv, f"{cfg}/opencode:{self.home}/.config/opencode")`. Keep the `ssh` assertion (line 227) — ssh is shared infra, still mounted for every agent.
+
 - [ ] **Step 3: Rewrite the two behavior-changed tests.**
   - Replace `EngineSelect.test_rebuild_flag_warns_under_bwrap` with:
 
@@ -1454,6 +1529,8 @@ The subprocess integration suite is the package's end-to-end safety net. Repoint
 
 Run: `python3 -m unittest discover -s test -v`
 Expected: PASS — integration tests (now `-s`/`-w`/`-u`, hitting the package via `-m agtbox`) plus `test_core`, `test_agents`, `test_sandboxes`, `test_discovery`, `test_install`, `test_cli`. `bin/agtbox.py` (old) is untouched and simply unused by tests.
+
+Before running, sanity-check no old flag survived the port: `grep -nE -- '-t (bwrap|podman)|"-v"|-bt|AGTBOX_REINSTALL' test/test_agtbox.py` should return nothing. A missed `-t`/`-v`/`-bt` yields a spurious exit-2.
 
 - [ ] **Step 6: Commit**
 
@@ -1516,5 +1593,7 @@ git commit -m "feat: flip bin/agtbox.py to a thin shim over the agtbox package; 
 **Placeholder scan:** No stubs. Install-env assembly is centralized in `install.install_env` (Task 9); the sandboxes (Tasks 6, 7) take ready `pairs` and never import install internals. `refresh_certs` body in Task 7 says "copied verbatim from current `refresh_certs()`" with the exact source lines (492–518) — a precise port instruction, not a vague placeholder.
 
 **Post-review revisions (folded in):** (1) install env centralized in `install.install_env`, honoring `Sandbox.install_full_env` — fixes a bwrap-install proxy/locale regression and removes per-sandbox duplication; `test_install.py::InstallEnvAsymmetry` guards it. (2) Identity files generated only in `Bwrap.prepare`, not `core.ensure_sources` (bwrap-only concern). (3) `fresh_core` loads a *separate* module instead of reloading the canonical `agtbox.core` (no cross-test poisoning). (4) `normalize_paths` warning uses `-w`/`-r` from Task 3. (5) Task 11 split into 11a (repoint suite at `python3 -m agtbox`, port flags, green) and 11b (flip the shim + docs) — the cutover carries no test risk because the package is proven via `-m agtbox` before `bin/agtbox.py` changes.
+
+**Second-review fixes (folded in):** (a) **Per-agent bind scoping** invalidated two argv "parity" tests — Task 11a Step 2b now re-scopes `BwrapArgv.test_locked_down_sandbox` (drop the opencode-XDG block from a claude run) and `PodmanArgv.test_run_argv` (assert opencode's config bind, not claude's). This is the one change that would otherwise redden the suite. (b) Task 7 now actually shows the migrated `RefreshCerts`/`BuildImage` test classes, with the rebuild test calling `Podman().rebuild()` (not `build_image`). (c) `Podman.build_image` uses `import sys` (not `__import__`). (d) Removed dead imports (`core.py` shutil, `base.py` subprocess). (e) `install_env` proxy test uses `mock.patch.dict` so `HTTPS_PROXY` can't leak.
 
 **Type consistency:** `agt_env(agent, do_core, machine)` and `install_env(agent, sandbox, do_core, machine)` match across Task 9; `ensure_tools(agent, sandbox, force)` calls `sandbox.install_machine()` then `sandbox.install(script, pairs)`. The `Sandbox` install surface — abstract `install_machine(self)` and `install(self, script, pairs)` plus class attr `install_full_env` — is consistent across Tasks 5, 6, 7, 9 (no `build_install_argv`, no `agent`/`do_core` on the sandbox). `RunContext` field names (`agent`, `binds`, `env`, `app_dir`, `volumes`, `ro_volumes`, `extra_args`) match across Tasks 5, 6, 7, 10. `Bind(src, dst, kind)` consistent across Tasks 1, 3, 4, 5.
