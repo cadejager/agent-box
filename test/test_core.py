@@ -41,5 +41,32 @@ class BindType(unittest.TestCase):
         self.assertEqual((b.src, b.dst, b.kind), ("/src", "/dst", "dir"))
 
 
+class Helpers(unittest.TestCase):
+    def test_arch_pair(self):
+        from agtbox import core
+        self.assertEqual(core.arch_pair("aarch64"), ("arm64", "arm64"))
+        self.assertEqual(core.arch_pair("x86_64"), ("x64", "amd64"))
+        with self.assertRaises(SystemExit):
+            core.arch_pair("riscv64")
+
+    def test_kv(self):
+        from agtbox import core
+        self.assertEqual(core._kv("FOO=bar=baz"), ("FOO", "bar=baz"))
+
+
+class ResolveEnv(unittest.TestCase):
+    def test_generic_plus_agent_forward_only_when_set(self):
+        from agtbox import core
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ["LANG"] = "en_US.UTF-8"
+        pairs = dict(core.resolve_env(["ANTHROPIC_API_KEY"], ["X=1"]))
+        self.assertEqual(pairs["LANG"], "en_US.UTF-8")   # generic forward, set
+        self.assertNotIn("ANTHROPIC_API_KEY", pairs)      # agent forward, unset
+        self.assertEqual(pairs["X"], "1")                 # agent literal
+        os.environ["ANTHROPIC_API_KEY"] = "sek"
+        pairs = dict(core.resolve_env(["ANTHROPIC_API_KEY"], []))
+        self.assertEqual(pairs["ANTHROPIC_API_KEY"], "sek")
+
+
 if __name__ == "__main__":
     unittest.main()
