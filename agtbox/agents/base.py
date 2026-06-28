@@ -3,11 +3,13 @@ from agtbox import core
 
 
 class Agent(ABC):
-    """One AI coding CLI. Subclasses set `name` and override what they need."""
+    """One AI coding CLI. Subclasses set `name` and override what they need.
+    The sequence defaults are tuples (immutable) so the shared class-level default
+    can't be mutated in place and leak between agents."""
     name = ""
-    packages = []
-    env_forward = []
-    env_literal = []
+    packages = ()
+    env_forward = ()
+    env_literal = ()
 
     @property
     def bin(self):

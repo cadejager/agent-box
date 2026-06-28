@@ -25,6 +25,17 @@ def fresh_core(home):
             os.environ["HOME"] = saved
 
 
+class _HomeCase(unittest.TestCase):
+    """Shared helper: a throwaway $HOME tree, cleaned up after the test."""
+
+    def _home(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        home = tmp / "home"
+        home.mkdir()
+        return home
+
+
 class Constants(unittest.TestCase):
     def test_arch_namespaced_paths(self):
         home = Path(tempfile.mkdtemp())
@@ -70,14 +81,7 @@ class ResolveEnv(unittest.TestCase):
         self.assertEqual(pairs["ANTHROPIC_API_KEY"], "sek")
 
 
-class EnsureSources(unittest.TestCase):
-    def _home(self):
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        h = tmp / "home"
-        h.mkdir()
-        return h
-
+class EnsureSources(_HomeCase):
     def test_creates_dirs_seeds_json_and_git_and_chmods_ssh(self):
         home = self._home()
         c = fresh_core(home)
@@ -100,14 +104,7 @@ class EnsureSources(unittest.TestCase):
         self.assertEqual(ro, [])   # ro dropped because also rw
 
 
-class IdentityFiles(unittest.TestCase):
-    def _home(self):
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        home = tmp / "home"
-        home.mkdir()
-        return home
-
+class IdentityFiles(_HomeCase):
     def test_identity_files_seeded_from_host_and_append_missing_entries(self):
         home = self._home()
         m = fresh_core(home)

@@ -34,9 +34,9 @@ class AgentContract(unittest.TestCase):
     def test_bash_is_degenerate(self):
         a = Bash()
         self.assertEqual(a.bin, "/usr/bin/bash")
-        self.assertEqual(a.packages, [])
-        self.assertEqual(a.binds, [])
-        self.assertEqual(a.env_forward + a.env_literal, [])
+        self.assertEqual(a.packages, ())                  # immutable default
+        self.assertEqual(a.binds, [])                     # binds property returns a fresh list
+        self.assertEqual(a.env_forward + a.env_literal, ())
 
 
 if __name__ == "__main__":
