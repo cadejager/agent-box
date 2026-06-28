@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-AGTBOX = REPO / "bin" / "agtbox.py"  # kept for Task 11b smoke test
+AGTBOX = REPO / "bin" / "agtbox.py"  # the shim entry point (see ShimEntryPoint)
 
 # A stub for both engines that tags what it was invoked for so a test can tell the
 # phases apart: an install (carries AGT_NPM_PKGS) -> INST:, an image build/rm ->

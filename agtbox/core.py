@@ -40,8 +40,8 @@ AGENT_ENV = [
     f"UV_TOOL_DIR={AGENT_TOOLS}/uv/tools",
     f"UV_TOOL_BIN_DIR={AGENT_TOOLS}/bin",
 ]
-# Generic (non-agent) env. Agent-specific vars (ANTHROPIC_*, OPENAI_*, OPENCODE_*,
-# CLAUDE_CODE_*) move into the agent plugins (Task 4).
+# Generic (non-agent) env, applied for every agent. Agent-specific vars
+# (ANTHROPIC_*, OPENAI_*, OPENCODE_*, CLAUDE_CODE_*) live on the agent plugins.
 ENV_FORWARD_GENERIC = [
     "TERM", "COLORTERM", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
@@ -134,7 +134,7 @@ def ensure_sources(binds):
     full merged list (shared + agent). dir/file -> create the dir; file -> seed
     '{}' if absent; seed -> create an empty file inside its (already-created) dir.
     NB: synthetic passwd/group identity files are NOT generated here -- they are a
-    bwrap-only concern, generated in Bwrap.prepare (Task 6)."""
+    bwrap-only concern, generated in Bwrap.prepare."""
     for d in (AGENT_TOOLS, f"{AGENT_CACHE}/npm", f"{AGENT_CACHE}/pip", f"{AGENT_CACHE}/uv"):
         os.makedirs(d, exist_ok=True)
     for b in binds:

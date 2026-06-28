@@ -36,7 +36,7 @@ def resolve_sandbox(name, sandboxes):
             print(f"Error: sandbox '{name}' is selected but not installed.", file=sys.stderr)
             sys.exit(1)
         return cls()
-    for _name, cls in sorted(sandboxes.items(), key=lambda kv: -kv[1].priority):
+    for _name, cls in sorted(sandboxes.items(), key=lambda kv: kv[1].priority, reverse=True):
         if cls.is_available():
             return cls()
     print("Error: no sandbox found (need bwrap or podman).", file=sys.stderr)

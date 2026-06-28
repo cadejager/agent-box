@@ -14,7 +14,10 @@ def _discover(package, base):
             continue
         mod = importlib.import_module(f"{package.__name__}.{info.name}")
         for obj in vars(mod).values():
-            if isinstance(obj, type) and issubclass(obj, base) and obj is not base:
+            # `obj.__module__ == mod.__name__` so a plugin that *imports* another
+            # plugin's class (e.g. to subclass it) doesn't re-register it here.
+            if (isinstance(obj, type) and issubclass(obj, base) and obj is not base
+                    and obj.__module__ == mod.__name__):
                 found[obj.name] = obj
     return dict(sorted(found.items()))
 

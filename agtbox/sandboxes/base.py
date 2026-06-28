@@ -42,10 +42,7 @@ class Sandbox(ABC):
         return args
 
     def env_args(self, ctx):
-        out = []
-        for pair in ctx.env:
-            out += self.fmt_env([pair])
-        return out
+        return self.fmt_env(ctx.env)
 
     def run(self, ctx):
         argv = self.build_run_argv(ctx)

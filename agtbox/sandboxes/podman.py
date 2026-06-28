@@ -32,9 +32,9 @@ class Podman(Sandbox):
             link = os.readlink("/etc/localtime")
         except OSError:
             return
-        idx = link.rfind("/zoneinfo/")
-        if idx != -1 and link[idx + len("/zoneinfo/"):]:
-            ctx.env.append(("TZ", link[idx + len("/zoneinfo/"):]))
+        _, sep, zone = link.partition("/zoneinfo/")
+        if sep and zone:
+            ctx.env.append(("TZ", zone))
 
     def rebuild(self):
         subprocess.run(["podman", "image", "rm", core.IMAGE],
