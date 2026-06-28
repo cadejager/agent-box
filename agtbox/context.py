@@ -1,9 +1,13 @@
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agtbox.agents.base import Agent
 
 
 @dataclass
 class RunContext:
-    agent: object
+    agent: "Agent"
     binds: list
     env: list                      # list[tuple[str, str]], mutable (prepare may append)
     app_dir: str

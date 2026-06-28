@@ -106,11 +106,11 @@ def ensure_identity_files():
             f.write("\n".join(content) + "\n")
 
     username = os.environ.get("USER") or str(os.getuid())
-    home_dir = os.environ.get("HOME") or HOME
     shell = os.environ.get("SHELL") or "/bin/bash"
 
     passwd_lines = [
-        (f"{username}:x:{os.getuid()}:{os.getgid()}::{home_dir}:{shell}", username),
+        # HOME is the module constant (os.environ["HOME"], validated non-empty at import).
+        (f"{username}:x:{os.getuid()}:{os.getgid()}::{HOME}:{shell}", username),
     ]
 
     groups = []
