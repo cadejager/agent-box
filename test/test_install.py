@@ -27,28 +27,31 @@ class AgtEnv(unittest.TestCase):
         self.assertEqual(pairs["AGT_NARCH"], "arm64")
 
 
-class InstallEnvAsymmetry(unittest.TestCase):
-    """bwrap install gets the full allowlist (incl. proxy/locale forwards + agent
-    literal); podman install gets AGENT_ENV only."""
+class InstallEnvContents(unittest.TestCase):
+    """The install env is sandbox-independent: AGENT_ENV routing + the generic
+    proxy/locale forwards WHEN set + the AGT_* inputs -- never the agent-specific
+    API/config vars (install doesn't run the agent)."""
 
-    def _sandbox(self, full):
-        return type("S", (), {"install_full_env": full})()
-
-    def test_bwrap_full_includes_forward_and_literal(self):
+    def test_routing_and_proxy_forward_but_no_agent_vars(self):
         import os
         from unittest import mock
         from agtbox.agents.claude import Claude
         with mock.patch.dict(os.environ, {"HTTPS_PROXY": "http://p"}):   # no leak into later tests
-            pairs = dict(install.install_env(Claude(), self._sandbox(True), True, "aarch64"))
-        self.assertEqual(pairs["HTTPS_PROXY"], "http://p")            # forward, regression guard
-        self.assertEqual(pairs["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"], "1")  # agent literal
+            pairs = dict(install.install_env(Claude(), True, "aarch64"))
+        self.assertIn("HOME", pairs)                                 # AGENT_ENV routing
+        self.assertEqual(pairs["HTTPS_PROXY"], "http://p")           # generic forward, when set
         self.assertEqual(pairs["AGT_NPM_PKGS"], "@anthropic-ai/claude-code")
+        self.assertNotIn("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", pairs)  # no agent vars
+        self.assertNotIn("ANTHROPIC_API_KEY", pairs)
 
-    def test_podman_agent_env_only(self):
+    def test_unset_proxy_is_omitted(self):
+        import os
+        from unittest import mock
         from agtbox.agents.claude import Claude
-        pairs = dict(install.install_env(Claude(), self._sandbox(False), True, "aarch64"))
-        self.assertIn("HOME", pairs)                                  # AGENT_ENV present
-        self.assertNotIn("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", pairs)  # no literal/forward
+        env = {k: v for k, v in os.environ.items() if k not in ("HTTPS_PROXY", "HTTP_PROXY")}
+        with mock.patch.dict(os.environ, env, clear=True):
+            pairs = dict(install.install_env(Claude(), True, "aarch64"))
+        self.assertNotIn("HTTPS_PROXY", pairs)                       # unset -> not forwarded
 
 
 if __name__ == "__main__":

@@ -8,7 +8,6 @@ from agtbox.sandboxes.base import Sandbox
 class Bwrap(Sandbox):
     name = "bwrap"
     priority = 20            # preferred over podman when available
-    install_full_env = True  # install gets the full run env (incl. proxy/locale forwards)
 
     def fmt_env(self, pairs):
         out = []

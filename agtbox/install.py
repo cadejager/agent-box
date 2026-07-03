@@ -58,15 +58,15 @@ def agt_env(agent, do_core, machine):
     ]
 
 
-def install_env(agent, sandbox, do_core, machine):
-    """Resolve the install env once, here (not in the sandbox). bwrap gets the full
-    run allowlist (so proxy/locale forwards reach the in-sandbox curl); podman gets
-    AGENT_ENV only -- matching the documented asymmetry. Plus the AGT_* inputs."""
-    if sandbox.install_full_env:
-        pairs = list(core.resolve_env(agent.env_forward, agent.env_literal))
-    else:
-        pairs = [core._kv(e) for e in core.AGENT_ENV]
-    return pairs + agt_env(agent, do_core, machine)
+def install_env(agent, do_core, machine):
+    """Resolve the install env once, here (not in the sandbox). The same for every
+    sandbox: AGENT_ENV (the npm/pip/uv routing into the mounted toolchain) + the
+    generic proxy/locale forwards WHEN set on the host -- so the install's downloads
+    work behind a proxy on either sandbox -- plus the AGT_* inputs. `resolve_env([],
+    [])` is exactly that: no agent-specific API/config vars, which the install never
+    needs (it downloads node + npm packages, it doesn't run the agent). An unset
+    forward is omitted, so this is a no-op on a machine with no proxy exported."""
+    return list(core.resolve_env([], [])) + agt_env(agent, do_core, machine)
 
 
 def ensure_tools(agent, sandbox, force):
@@ -79,5 +79,5 @@ def ensure_tools(agent, sandbox, force):
         return
     print(f"Agent Box: setting up the toolchain in {core.AGENT_TOOLS} (one-time)...", file=sys.stderr)
     do_core = force or not stamp
-    pairs = install_env(agent, sandbox, do_core, sandbox.install_machine())
+    pairs = install_env(agent, do_core, sandbox.install_machine())
     sandbox.install(install_script(), pairs)

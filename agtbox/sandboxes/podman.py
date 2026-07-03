@@ -12,7 +12,6 @@ PROJ_DIR = str(Path(__file__).resolve().parents[2])   # .../agtbox/sandboxes/pod
 class Podman(Sandbox):
     name = "podman"
     priority = 10
-    install_full_env = False     # podman install: AGENT_ENV only (matches old behavior)
 
     def fmt_env(self, pairs):
         out = []

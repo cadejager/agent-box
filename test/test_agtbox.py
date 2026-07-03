@@ -410,27 +410,38 @@ class InstallTrigger(LauncherTest):
 
 
 class InstallEnv(LauncherTest):
-    """The deliberate install-env asymmetry: bwrap install gets the full env
-    allowlist (via bwrap_common); podman install gets AGENT_ENV only."""
+    """The install env is the same for every sandbox: AGENT_ENV (npm/uv routing)
+    + the generic proxy/locale forwards when set + the AGT_* inputs. The
+    agent-specific API/config vars are NOT passed to install -- it never runs the
+    agent, only downloads node + the npm package."""
 
     def setUp(self):
         super().setUp()
         (self.tools / ".stamp").unlink()   # force the install to run
 
-    def test_podman_install_is_agent_env_only(self):
+    def test_podman_install_env(self):
         r = self.launch_capture("-s", "podman", "-a", str(self.app), "claude")
         self.assertEqual(r.rc, 0, r.err)
-        self.assertIn(f"HOME={self.home}", r.inst)            # AGENT_ENV present
-        self.assertIn(f"AGT_TOOLS={self.tools}", r.inst)      # AGT_* inputs present
-        # ENV_LITERAL / ENV_FORWARD are NOT passed to the podman install:
-        self.assertNotIn("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", r.inst)
+        self.assertIn(f"HOME={self.home}", r.inst)            # AGENT_ENV routing
+        self.assertIn(f"AGT_TOOLS={self.tools}", r.inst)      # AGT_* inputs
+        self.assertNotIn("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", r.inst)  # no agent vars
 
-    def test_bwrap_install_has_full_allowlist(self):
+    def test_bwrap_install_env(self):
         r = self.launch_capture("-s", "bwrap", "-a", str(self.app), "claude")
         self.assertEqual(r.rc, 0, r.err)
         self.assertIn("AGT_NPM_PKGS", r.inst)                 # AGT_* inputs
-        # bwrap install goes through bwrap_common -> the full env allowlist:
-        self.assertIn("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", r.inst)
+        self.assertNotIn("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", r.inst)   # no agent vars
+
+    def test_proxy_forwarded_to_install_on_both_sandboxes(self):
+        # The fix: a host proxy reaches the install for BOTH sandboxes (podman used
+        # to get AGENT_ENV only). Engine formats env differently (bwrap `--setenv K V`,
+        # podman `-e K=V`), so match on the key prefix.
+        for sb in ("bwrap", "podman"):
+            r = self.launch_capture("-s", sb, "-a", str(self.app), "claude",
+                                    env_add={"HTTPS_PROXY": "http://proxy:8080"})
+            self.assertEqual(r.rc, 0, r.err)
+            self.assertTrue(any(a.startswith("HTTPS_PROXY") for a in r.inst),
+                            f"{sb}: proxy must reach the install env; got {r.inst}")
 
 
 class EnvForward(LauncherTest):

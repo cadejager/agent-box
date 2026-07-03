@@ -6,7 +6,6 @@ from abc import ABC, abstractmethod
 class Sandbox(ABC):
     name = ""
     priority = 0
-    install_full_env = False     # True -> install gets the full run env allowlist
 
     @classmethod
     def is_available(cls):

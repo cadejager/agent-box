@@ -75,7 +75,6 @@ class BwrapArgv(unittest.TestCase):
         self.assertEqual(argv[0], "bwrap")
         self.assertIn("HTTPS_PROXY", argv)            # forwarded proxy reaches install
         self.assertEqual(argv[-3:], ["/usr/bin/bash", "-c", "SCRIPT"])
-        self.assertTrue(Bwrap().install_full_env)
 
 
 class PodmanArgv(unittest.TestCase):
