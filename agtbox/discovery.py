@@ -1,6 +1,7 @@
 """Runtime discovery of the in-repo sandbox/agent plugins."""
 import importlib
 import pkgutil
+import sys
 from agtbox import agents as agents_pkg
 from agtbox import sandboxes as sandboxes_pkg
 from agtbox.agents.base import Agent
@@ -16,9 +17,15 @@ def _discover(package, base):
         for obj in vars(mod).values():
             # `obj.__module__ == mod.__name__` so a plugin that *imports* another
             # plugin's class (e.g. to subclass it) doesn't re-register it here.
-            if (isinstance(obj, type) and issubclass(obj, base) and obj is not base
+            if not (isinstance(obj, type) and issubclass(obj, base) and obj is not base
                     and obj.__module__ == mod.__name__):
-                found[obj.name] = obj
+                continue
+            if not obj.name:
+                sys.exit(f"Error: plugin {info.name} ({obj.__name__}) has an empty name.")
+            if obj.name in found:
+                sys.exit(f"Error: two plugins claim the name '{obj.name}' "
+                         f"({found[obj.name].__module__}, {obj.__module__}).")
+            found[obj.name] = obj
     return dict(sorted(found.items()))
 
 
