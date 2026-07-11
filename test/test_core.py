@@ -94,6 +94,21 @@ class EnsureSources(_HomeCase):
         self.assertTrue((cfg / "git/config").is_file())
         self.assertEqual((cfg / "ssh").stat().st_mode & 0o777, 0o700)
 
+    def test_existing_file_bind_not_clobbered(self):
+        # A file bind is seeded '{}' only when ABSENT -- an existing one (e.g. a real
+        # claude.json holding the user's login) must be left untouched, or every
+        # launch would wipe their session.
+        home = self._home()
+        c = fresh_core(home)
+        cfg = home / ".config/agent-box"
+        cfg.mkdir(parents=True)
+        (cfg / "claude.json").write_text('{"real":"login-state"}')
+        # SHARED_BINDS included so ensure_sources runs its full path (it always gets
+        # the shared binds); the point is the existing claude.json survives.
+        c.ensure_sources([c.Bind(f"{cfg}/claude.json", f"{home}/.claude.json", "file"),
+                          *c.SHARED_BINDS])
+        self.assertEqual((cfg / "claude.json").read_text(), '{"real":"login-state"}')
+
     def test_normalize_rw_wins_over_ro_with_warning(self):
         c = fresh_core(self._home())
         d = Path(tempfile.mkdtemp())

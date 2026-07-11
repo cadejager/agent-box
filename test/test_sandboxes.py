@@ -66,6 +66,22 @@ class BwrapArgv(unittest.TestCase):
         self.assertEqual(argv[-1], "--resume")        # extra args last
         self.assertIn("--setenv", argv)
 
+    def test_bind_ordering_invariants(self):
+        # bwrap mounts stack: a later bind shadows an earlier one. The whole
+        # locked-down model rests on this order, so pin it (membership alone would
+        # let an alphabetize/reorder pass CI while breaking isolation).
+        from agtbox.sandboxes.bwrap import Bwrap
+        argv = Bwrap().build_run_argv(self._ctx())
+        i_etc = argv.index("/etc")                            # --ro-bind /etc /etc
+        i_passwd = argv.index(f"{agtbox.core.AGENT_STATE}/passwd")
+        i_home = argv.index(agtbox.core.HOME)                 # --tmpfs $HOME
+        i_tools = argv.index(agtbox.core.AGENT_TOOLS)         # --bind toolchain
+        # passwd/group overlays must be bound AFTER the general /etc bind to overlay it
+        self.assertLess(i_etc, i_passwd)
+        # the rw toolchain bind (under $HOME) must come AFTER the $HOME tmpfs, else the
+        # tmpfs shadows it and every run reinstalls
+        self.assertLess(i_home, i_tools)
+
     def test_install_runs_bwrap_with_given_pairs(self):
         from unittest import mock
         from agtbox.sandboxes.bwrap import Bwrap

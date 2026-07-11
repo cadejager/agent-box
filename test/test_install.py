@@ -1,8 +1,19 @@
+import shutil
+import subprocess
 import unittest
 from agtbox import install
 
 
 class InstallScript(unittest.TestCase):
+    def test_is_syntactically_valid_bash(self):
+        # install_script() is a ~40-line hand-maintained shell string; a stray quote
+        # would break first-run install for every user and no other test would notice.
+        # `bash -n` parses without executing (no network/downloads).
+        bash = shutil.which("bash") or "/bin/bash"
+        r = subprocess.run([bash, "-n", "-c", install.install_script()],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_aux_tools_best_effort_and_stamp_last(self):
         s = install.install_script()
         for tool in ("uv", "gh", "glab"):
