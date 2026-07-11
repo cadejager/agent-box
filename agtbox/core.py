@@ -1,5 +1,4 @@
 """Core constants, the Bind type, env tables, and host-side source setup."""
-import grp
 import os
 import sys
 from dataclasses import dataclass
@@ -82,51 +81,6 @@ SHARED_BINDS = [
     Bind(f"{AGENT_CONFIG}/ssh", f"{HOME}/.ssh"),
     Bind(f"{AGENT_CONFIG}/git/config", f"{HOME}/.config/git/config", "seed"),
 ]
-
-
-def ensure_identity_files():
-    """Generate synthetic passwd/group files in AGENT_STATE for LDAP users.
-    Only append the current user/groups if they are missing from the host files.
-    """
-    os.makedirs(AGENT_STATE, exist_ok=True)
-
-    def sync_file(filename, host_path, current_lines):
-        dst = f"{AGENT_STATE}/{filename}"
-        try:
-            with open(host_path, "r") as f:
-                content = f.read().splitlines()
-        except OSError:
-            content = []
-
-        for line, marker in current_lines:
-            if not any(existing.startswith(f"{marker}:") for existing in content):
-                content.append(line)
-
-        with open(dst, "w") as f:
-            f.write("\n".join(content) + "\n")
-
-    username = os.environ.get("USER") or str(os.getuid())
-    shell = os.environ.get("SHELL") or "/bin/bash"
-
-    passwd_lines = [
-        # HOME is the module constant (os.environ["HOME"], validated non-empty at import).
-        (f"{username}:x:{os.getuid()}:{os.getgid()}::{HOME}:{shell}", username),
-    ]
-
-    groups = []
-    seen = set()
-    for gid in [os.getgid(), *os.getgroups()]:
-        if gid in seen:
-            continue
-        seen.add(gid)
-        try:
-            group = grp.getgrgid(gid)
-            groups.append((f"{group.gr_name}:x:{group.gr_gid}:{','.join(group.gr_mem)}", group.gr_name))
-        except KeyError:
-            groups.append((f"{gid}:x:{gid}:", str(gid)))
-
-    sync_file("passwd", "/etc/passwd", passwd_lines)
-    sync_file("group", "/etc/group", groups)
 
 
 def ensure_sources(binds):

@@ -1,8 +1,54 @@
+import grp
 import os
 import subprocess
 from agtbox import core
-from agtbox.context import RunContext
 from agtbox.sandboxes.base import Sandbox
+
+
+def ensure_identity_files():
+    """Generate synthetic passwd/group files in AGENT_STATE for LDAP-backed users,
+    which bwrap binds over /etc/passwd and /etc/group so the sandbox can resolve the
+    invoking user/groups. Only appends the current user/groups when missing from the
+    host files. bwrap-only -- podman resolves identity from the image/host mapping."""
+    os.makedirs(core.AGENT_STATE, exist_ok=True)
+
+    def sync_file(filename, host_path, current_lines):
+        dst = f"{core.AGENT_STATE}/{filename}"
+        try:
+            with open(host_path, "r") as f:
+                content = f.read().splitlines()
+        except OSError:
+            content = []
+
+        for line, marker in current_lines:
+            if not any(existing.startswith(f"{marker}:") for existing in content):
+                content.append(line)
+
+        with open(dst, "w") as f:
+            f.write("\n".join(content) + "\n")
+
+    username = os.environ.get("USER") or str(os.getuid())
+    shell = os.environ.get("SHELL") or "/bin/bash"
+
+    passwd_lines = [
+        # core.HOME is the module constant (os.environ["HOME"], validated at import).
+        (f"{username}:x:{os.getuid()}:{os.getgid()}::{core.HOME}:{shell}", username),
+    ]
+
+    groups = []
+    seen = set()
+    for gid in [os.getgid(), *os.getgroups()]:
+        if gid in seen:
+            continue
+        seen.add(gid)
+        try:
+            group = grp.getgrgid(gid)
+            groups.append((f"{group.gr_name}:x:{group.gr_gid}:{','.join(group.gr_mem)}", group.gr_name))
+        except KeyError:
+            groups.append((f"{gid}:x:{gid}:", str(gid)))
+
+    sync_file("passwd", "/etc/passwd", passwd_lines)
+    sync_file("group", "/etc/group", groups)
 
 
 class Bwrap(Sandbox):
@@ -19,9 +65,9 @@ class Bwrap(Sandbox):
         return ["--ro-bind" if ro else "--bind", src, dst]
 
     def prepare(self, ctx):
-        core.ensure_identity_files()
+        ensure_identity_files()
 
-    def base_args(self, ctx):
+    def base_args(self, env_pairs):
         resolv = os.path.realpath("/etc/resolv.conf")
         bw = [
             "--clearenv",
@@ -39,11 +85,11 @@ class Bwrap(Sandbox):
             "--bind", core.AGENT_CACHE, core.AGENT_CACHE,
             "--die-with-parent", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
         ]
-        bw += self.env_args(ctx)
+        bw += self.fmt_env(env_pairs)
         return bw
 
     def build_run_argv(self, ctx):
-        bw = self.base_args(ctx)
+        bw = self.base_args(ctx.env)
         bw += ["--bind", ctx.app_dir, ctx.app_dir, "--chdir", ctx.app_dir]
         bw += self.bind_args(ctx)
         return ["bwrap", *bw, "--", ctx.agent.bin, *ctx.extra_args]
@@ -53,7 +99,10 @@ class Bwrap(Sandbox):
 
     def install(self, script, pairs):
         # Run the install in a nested bwrap with the SAME locked-down base as a real
-        # run, over a minimal context (no project/config binds). `pairs` is already
-        # resolved by ensure_tools (full allowlist for bwrap), so no env assembly here.
-        bw = self.base_args(RunContext(agent=None, binds=[], env=list(pairs), app_dir=core.HOME))
+        # run, over a minimal env (no project/config binds). `pairs` is the fully
+        # resolved install env from ensure_tools, so no env assembly here. Generate
+        # the identity files ourselves so install never depends on prepare() first --
+        # base_args binds AGENT_STATE/passwd, which must exist.
+        ensure_identity_files()
+        bw = self.base_args(list(pairs))
         subprocess.run(["bwrap", *bw, "--", "/usr/bin/bash", "-c", script], check=True)
