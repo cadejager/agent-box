@@ -36,7 +36,11 @@ class Podman(Sandbox):
             ctx.env.append(("TZ", zone))
 
     def rebuild(self):
-        subprocess.run(["podman", "image", "rm", core.IMAGE],
+        # --force so a -b rebuild can't silently no-op: without it, if `image rm`
+        # fails (e.g. the image is referenced by a stopped container) build_image()
+        # would then see the image still present and skip the rebuild the user asked
+        # for. An absent image is the only expected failure and is harmless.
+        subprocess.run(["podman", "image", "rm", "--force", core.IMAGE],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def build_image(self):
@@ -76,13 +80,21 @@ class Podman(Sandbox):
             pass
 
     def build_run_argv(self, ctx):
-        pd = ["run", "-it", "--rm", "--security-opt", "label=disable"]
+        # -t (allocate a TTY) only when actually attached to one, so an interactive
+        # TUI works in a real terminal AND `agtbox bash -- -c ...` works in a pipe/CI
+        # (podman -it in a non-TTY dies "the input device is not a TTY"). -i always.
+        tty = ["-t"] if sys.stdin.isatty() and sys.stdout.isatty() else []
+        pd = ["run", "-i", *tty, "--rm", "--security-opt", "label=disable"]
         pd += self.env_args(ctx)
-        pd += ["-v", f"{core.AGENT_TOOLS}:{core.AGENT_TOOLS}",
-               "-v", f"{core.AGENT_CACHE}:{core.AGENT_CACHE}"]
+        pd += self._toolchain_mounts()
         pd += ["-v", f"{ctx.app_dir}:{ctx.app_dir}", "-w", ctx.app_dir]
         pd += self.bind_args(ctx)
         return ["podman", *pd, "--", core.IMAGE, ctx.agent.bin, *ctx.extra_args]
+
+    def _toolchain_mounts(self):
+        # The rw toolchain + cache binds, shared by run and install so they can't drift.
+        return ["-v", f"{core.AGENT_TOOLS}:{core.AGENT_TOOLS}",
+                "-v", f"{core.AGENT_CACHE}:{core.AGENT_CACHE}"]
 
     def install_machine(self):
         # Arch comes from the IMAGE, not the host: a macOS host differs from the
@@ -91,9 +103,8 @@ class Podman(Sandbox):
                               check=True, capture_output=True, text=True).stdout.strip()
 
     def install(self, script, pairs):
-        # `pairs` already resolved by ensure_tools (AGENT_ENV-only for podman).
-        pd = ["run", "--rm", "--security-opt", "label=disable",
-              "-v", f"{core.AGENT_TOOLS}:{core.AGENT_TOOLS}",
-              "-v", f"{core.AGENT_CACHE}:{core.AGENT_CACHE}"]
+        # `pairs` is the fully-resolved install env from ensure_tools (same for every
+        # sandbox), so there is no env assembly here.
+        pd = ["run", "--rm", "--security-opt", "label=disable", *self._toolchain_mounts()]
         pd += self.fmt_env(pairs)
         subprocess.run(["podman", *pd, "--", core.IMAGE, "/usr/bin/bash", "-c", script], check=True)

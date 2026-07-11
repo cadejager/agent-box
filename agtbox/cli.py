@@ -39,7 +39,8 @@ def resolve_sandbox(name, sandboxes):
     for _name, cls in sorted(sandboxes.items(), key=lambda kv: kv[1].priority, reverse=True):
         if cls.is_available():
             return cls()
-    print("Error: no sandbox found (need bwrap or podman).", file=sys.stderr)
+    print(f"Error: no sandbox found (need one of: {', '.join(sorted(sandboxes))}).",
+          file=sys.stderr)
     sys.exit(1)
 
 

@@ -155,8 +155,10 @@ def ensure_sources(binds):
 def normalize_paths(app_dir, volumes, ro_volumes):
     """Resolve app_dir and every extra volume to an absolute path."""
     app_dir = os.path.realpath(app_dir)
-    volumes = [os.path.realpath(v) for v in volumes]
-    ro_volumes = [os.path.realpath(v) for v in ro_volumes]
+    # dict.fromkeys dedups while preserving order: a repeated -w/-r (same path twice)
+    # is a duplicate mount destination that podman rejects with an opaque error.
+    volumes = list(dict.fromkeys(os.path.realpath(v) for v in volumes))
+    ro_volumes = list(dict.fromkeys(os.path.realpath(v) for v in ro_volumes))
     # A bind source must exist or the engine fails with an opaque error -- check
     # up front and fail with a clear message instead.
     for p in [app_dir, *volumes, *ro_volumes]:

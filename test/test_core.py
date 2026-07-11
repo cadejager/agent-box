@@ -103,6 +103,14 @@ class EnsureSources(_HomeCase):
         app, _, ro = c.normalize_paths(str(d), [str(d)], [str(d)])
         self.assertEqual(ro, [])   # ro dropped because also rw
 
+    def test_normalize_dedups_repeated_volumes(self):
+        c = fresh_core(self._home())
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        _, vols, ro = c.normalize_paths(str(d), [str(d), str(d)], [str(d), str(d)])
+        self.assertEqual(vols, [os.path.realpath(str(d))])   # repeated -w collapsed to one
+        self.assertEqual(ro, [])                             # ...and ro-that-is-also-rw dropped
+
 
 class IdentityFiles(_HomeCase):
     def test_identity_files_seeded_from_host_and_append_missing_entries(self):

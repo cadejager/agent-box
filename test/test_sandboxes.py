@@ -87,9 +87,12 @@ class PodmanArgv(unittest.TestCase):
                           ro_volumes=["/ro"], extra_args=["--session", "Y"])
 
     def test_run_argv(self):
+        from unittest import mock
         from agtbox.sandboxes.podman import Podman
-        argv = Podman().build_run_argv(self._ctx())
-        for w in ("podman", "run", "-it", "--rm", "--security-opt", "label=disable"):
+        with mock.patch("agtbox.sandboxes.podman.sys.stdin.isatty", return_value=False), \
+             mock.patch("agtbox.sandboxes.podman.sys.stdout.isatty", return_value=False):
+            argv = Podman().build_run_argv(self._ctx())
+        for w in ("podman", "run", "-i", "--rm", "--security-opt", "label=disable"):
             self.assertIn(w, argv)
         self.assertIn("-e", argv)
         self.assertIn("HOME=/h", argv)
@@ -98,6 +101,22 @@ class PodmanArgv(unittest.TestCase):
         self.assertIn("agent-box", argv)
         self.assertEqual(argv[-2:], ["--session", "Y"])
         self.assertNotIn("--clearenv", argv)
+
+    def test_tty_allocated_only_when_attached(self):
+        from unittest import mock
+        from agtbox.sandboxes.podman import Podman
+        # attached to a terminal -> allocate a TTY (interactive TUIs)
+        with mock.patch("agtbox.sandboxes.podman.sys.stdin.isatty", return_value=True), \
+             mock.patch("agtbox.sandboxes.podman.sys.stdout.isatty", return_value=True):
+            argv = Podman().build_run_argv(self._ctx())
+        self.assertIn("-t", argv)
+        self.assertIn("-i", argv)
+        # not a terminal (pipe/CI) -> no -t, so `bash -- -c ...` works
+        with mock.patch("agtbox.sandboxes.podman.sys.stdin.isatty", return_value=False), \
+             mock.patch("agtbox.sandboxes.podman.sys.stdout.isatty", return_value=True):
+            argv = Podman().build_run_argv(self._ctx())
+        self.assertNotIn("-t", argv)
+        self.assertIn("-i", argv)
 
     def test_derive_tz_appends_to_ctx_env(self):
         from unittest import mock

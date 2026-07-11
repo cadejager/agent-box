@@ -203,8 +203,12 @@ class PodmanArgv(LauncherTest):
         rc, argv, err = self.launch("-s", "podman", "-a", str(self.app),
                                     "-r", str(self.ro), "opencode", "--", "--session", "Y")
         self.assertEqual(rc, 0, err)
-        for word in ("run", "-it", "--rm", "--security-opt", "label=disable"):
+        # -i always; -t only when attached to a terminal. The harness captures stdout
+        # (not a TTY), so this run has -i but no -t (which is what lets `bash -- -c ...`
+        # work in a pipe/CI). TTY allocation is unit-tested in test_sandboxes.
+        for word in ("run", "-i", "--rm", "--security-opt", "label=disable"):
             self.assertArg(argv, word)
+        self.assertNoArg(argv, "-t")                 # non-TTY subprocess -> no pseudo-TTY
         self.assertNoArg(argv, "--userns=keep-id")   # run as container-root -> host user
         # env as -e K=V
         self.assertArg(argv, f"HOME={self.home}")

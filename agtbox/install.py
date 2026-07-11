@@ -36,14 +36,17 @@ if [ "${AGT_DO_CORE}" = "1" ]; then
   if [ -n "${skipped}" ]; then
     echo "Agent Box: core toolchain ready; skipped:${skipped} (retry later with -u)." >&2
   fi
+  # .stamp marks the core toolchain as installed. Written here -- after the core
+  # block, before the npm step -- so a failed agent `npm install` can't force a full
+  # node re-download next run (the npm step is separately gated by the agent bin's
+  # presence). With set -e, a failed core install aborts before this line.
+  date > "${AGT_TOOLS}/.stamp"
 fi
 
 if [ -n "${AGT_NPM_PKGS}" ]; then
   echo 'Agent Box: installing the agent CLI...' >&2
   "${AGT_TOOLS}/node/bin/npm" install -g --prefix "${AGT_TOOLS}" --no-fund --no-audit ${AGT_NPM_PKGS}
 fi
-
-date > "${AGT_TOOLS}/.stamp"
 '''
 
 
