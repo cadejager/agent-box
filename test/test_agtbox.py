@@ -534,12 +534,6 @@ def load_agtbox(home):
 
 
 class Helpers(unittest.TestCase):
-    def test_arch_pair(self):
-        self.assertEqual(agtbox.arch_pair("aarch64"), ("arm64", "arm64"))
-        self.assertEqual(agtbox.arch_pair("x86_64"), ("x64", "amd64"))
-        with self.assertRaises(SystemExit):
-            agtbox.arch_pair("riscv64")
-
     def test_split_pair(self):
         self.assertEqual(agtbox._split_pair("/a/b:/c/d"), ("/a/b", "/c/d"))
 
@@ -592,6 +586,40 @@ class Helpers(unittest.TestCase):
         podman = agtbox.bind_args("podman")
         self.assertIn("/vol:/vol", podman)
         self.assertIn("/rovol:/rovol:ro", podman)
+
+
+class ArchPair(unittest.TestCase):
+    def test_x86_64_maps_all_arch_names(self):
+        self.assertEqual(agtbox.arch_pair("x86_64"), ("x64", "amd64", "x86_64"))
+
+    def test_aarch64_maps_all_arch_names(self):
+        self.assertEqual(agtbox.arch_pair("aarch64"), ("arm64", "arm64", "aarch64"))
+
+    def test_unsupported_arch_exits(self):
+        with self.assertRaises(SystemExit):
+            agtbox.arch_pair("sparc64")
+
+
+class InstallScript(unittest.TestCase):
+    def test_uv_install_uses_github_release_api(self):
+        script = agtbox.install_script()
+        self.assertIn("https://api.github.com/repos/astral-sh/uv/releases/latest", script)
+
+    def test_uv_install_does_not_use_astral_script(self):
+        script = agtbox.install_script()
+        self.assertNotIn("https://astral.sh/uv/install.sh", script)
+
+    def test_uv_install_uses_linux_gnu_tarball_pattern(self):
+        script = agtbox.install_script()
+        self.assertIn("uv-${AGT_UVARCH}-unknown-linux-gnu.tar.gz", script)
+
+    def test_uvx_is_installed_with_uv(self):
+        script = agtbox.install_script()
+        self.assertIn('install -m755 "/tmp/uv-${AGT_UVARCH}-unknown-linux-gnu/uvx" "${AGT_TOOLS}/bin/uvx"', script)
+
+    def test_uv_warning_stays_best_effort(self):
+        script = agtbox.install_script()
+        self.assertIn("WARNING -- uv install failed", script)
 
 
 class EnsureSources(unittest.TestCase):

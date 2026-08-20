@@ -15,7 +15,7 @@ There's no application code here — the "source" is a single Python launcher, `
 
 - **An engine:** either **bubblewrap** (`bwrap`) + **unprivileged user namespaces** — the default on most modern Linux, no root/setuid (Debian/Ubuntu: `apt install bubblewrap`) — **or podman** (used automatically when bwrap is absent, e.g. on **macOS**: `brew install podman && podman machine init && podman machine start`). The launcher prefers bwrap when present; force one with `-t podman|bwrap`.
 - **python3** — the launcher itself is a Python 3 script (stdlib only, no third-party packages). Under bwrap, the host also supplies the tools the agents lean on (`git`, `curl`, `tar` during setup; `ripgrep`/`jq`/compilers as projects need them); under podman those come from the image, so the host needs only podman + python3.
-- Everything else — node, `uv`, and the agent CLIs — is **installed automatically on first run** into `~/.local/share/agent-box` (the same toolchain for both engines). Local-model *serving* is out of scope (run e.g. [LM Studio](https://lmstudio.ai) separately and point an agent at it; see below).
+- Everything else — node, `uv`, and the agent CLIs — is **installed automatically on first run** into `~/.local/share/agent-box` (the same toolchain for both engines), with `uv` fetched from GitHub release assets. Local-model *serving* is out of scope (run e.g. [LM Studio](https://lmstudio.ai) separately and point an agent at it; see below).
 
 ## Quick start
 
@@ -28,7 +28,7 @@ cd agent-box
 ./bin/agtbox.py codex         # OpenAI Codex
 ```
 
-The **first** launch installs the toolchain (node + `uv` + the three CLIs + `gh`/`glab`) into `~/.local/share/agent-box` — a one-time download, done inside the sandbox so the installers can't touch your host (under podman it also builds the image first). Later launches start instantly. Your current directory is bound into the sandbox **at the same absolute path**, so any path the agent prints is valid on your host. `bin/agtbox.py` can be run from anywhere.
+The **first** launch installs the toolchain (node + `uv` + the three CLIs + `gh`/`glab`) into `~/.local/share/agent-box` — a one-time download, done inside the sandbox so the installers can't touch your host (under podman it also builds the image first). `uv` is installed from its GitHub release tarball; later launches start instantly. Your current directory is bound into the sandbox **at the same absolute path**, so any path the agent prints is valid on your host. `bin/agtbox.py` can be run from anywhere.
 
 ## Usage
 
@@ -104,7 +104,7 @@ CLAUDE.md                 # terse architecture reference (for AI assistants)
 - **macOS / podman.** podman runs a Linux VM that shares your `$HOME`, so the `agent-box` dirs and your project must live **under `$HOME`**.
 - **Shared home across different-arch machines (HPC).** If the same `$HOME` is mounted on nodes of different CPU architectures (e.g. x86_64 and aarch64), that's fine: the toolchain lives under `~/.local/share/agent-box/<arch>`, so each arch installs and uses its own native binaries while sharing config, state, and download caches. The first run on each new arch does its own one-time install.
 - **Behind a corporate proxy?** If a TLS-intercepting proxy sits between you and the internet, the **podman** engine bakes your company's CA certs into the image at build time: drop them (PEM, `.crt` extension) into `~/.local/share/certs/` (or set `AGENT_CERTS_DIR`) and they're trusted inside the container. The **bwrap** engine needs nothing — it reuses your host's own trust store (the `/etc` CA binds, plus `/var/lib/ca-certificates` on SLES/openSUSE, where `/etc/ssl` symlinks into `/var`), so whatever your host already trusts, the agents trust too. The launcher also forwards `http_proxy`/`https_proxy`/`no_proxy` (and the uppercase forms) into the sandbox when they're set.
-- **Locked-down network?** The agent CLIs (node + npm) are **required**; `uv`, `gh`, and `glab` are **auxiliary** and installed best-effort. If their download hosts (`astral.sh`, `github.com`, `gitlab.com`) are blocked while the node/npm registries are allowed, the install **warns and continues** — the core toolchain still completes (so the agents run) and isn't re-downloaded every launch. Re-run with `AGTBOX_REINSTALL=1` to retry the skipped tools once they're reachable (e.g. via a proxy or once a host is allowlisted).
+- **Locked-down network?** The agent CLIs (node + npm) are **required**; `uv`, `gh`, and `glab` are **auxiliary** and installed best-effort. If their download hosts (`github.com`, `gitlab.com`) are blocked while the node/npm registries are allowed, the install **warns and continues** — the core toolchain still completes (so the agents run) and isn't re-downloaded every launch. Re-run with `AGTBOX_REINSTALL=1` to retry the skipped tools once they're reachable (e.g. via a proxy or once a host is allowlisted).
 - **Coming from the old build?** The old image-based build (and its Charliecloud path) is gone; podman is back as the macOS engine but now uses a slim `agent-box` image built on demand. Config in `~/.config/agent-box` carries over; `podman image rm agent-box` forces a fresh image build next run.
 - See [`CLAUDE.md`](CLAUDE.md) for the architecture-level reference.
 
