@@ -622,6 +622,13 @@ class InstallScript(unittest.TestCase):
         self.assertIn("WARNING -- uv install failed", script)
 
 
+class WorkflowDocs(unittest.TestCase):
+    def test_lint_workflow_sets_up_python_3_11(self):
+        workflow = (REPO / ".github/workflows/lint.yml").read_text()
+        self.assertIn("actions/setup-python", workflow)
+        self.assertIn("python-version: '3.11'", workflow)
+
+
 class EnsureSources(unittest.TestCase):
     def _home(self):
         tmp = Path(tempfile.mkdtemp())

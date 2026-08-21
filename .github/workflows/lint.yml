@@ -10,6 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
       # pipx is preinstalled on the ubuntu-latest runner; ruff runs ephemerally.
       - name: ruff
         run: pipx run ruff check bin/agtbox.py test/test_agtbox.py

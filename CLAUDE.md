@@ -13,7 +13,7 @@ Agent Box: a single Python 3 launcher (stdlib only) that runs AI coding agents (
 ```
 
 - Flags (`-a`/`-v`/`-r`/`-t`/`-b`, plus argparse's `-h`) come **before** the tool name; the agent's own args go **after a `--` separator** and are passed **verbatim** (no flag remapping) — session handling is each tool's own syntax (claude `--continue`/`--resume [ID]`/`--fork-session`; opencode `--continue`/`--session ID`/`--fork`; codex `resume [ID]`/`fork [ID]`). A bare `agtbox.py <tool>` needs no `--`. `-v` = read-write bind, `-r` = read-only bind, both at the same host path. `-t` forces the engine (default: auto — bwrap on Linux, else podman); `-b` rebuilds the podman image (podman only).
-- The toolchain auto-installs into `~/.local/share/agent-box` on first run (`AGTBOX_REINSTALL=1` forces a reinstall). Test suite: `python3 -m unittest discover -s test` (or `python3 test/test_agtbox.py`).
+- The toolchain auto-installs into `~/.local/share/agent-box` on first run (`AGTBOX_REINSTALL=1` forces a reinstall). The supported host Python floor is 3.11. Test suite: `python3 -m unittest discover -s test` (or `python3 test/test_agtbox.py`).
 
 ## Architecture
 
