@@ -529,8 +529,8 @@ def build_image():
     toolchain (~/.local/share/agent-box), so a rebuild never disturbs them."""
     if REBUILD:
         subprocess.run(["podman", "image", "rm", IMAGE],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    exists = subprocess.run(["podman", "image", "exists", IMAGE]).returncode == 0
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    exists = subprocess.run(["podman", "image", "exists", IMAGE], check=False).returncode == 0
     if not exists:
         print(f"Agent Box: building the {IMAGE} image (one-time)...", file=sys.stderr)
         refresh_certs()

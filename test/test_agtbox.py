@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Test suite for bin/agtbox.py (Agent Box launcher: bwrap + podman engines).
 
 Two layers, stdlib `unittest` only (no third-party deps):
@@ -21,8 +20,8 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import mock_open
 from unittest import mock
+from unittest.mock import mock_open
 
 REPO = Path(__file__).resolve().parent.parent
 AGTBOX = REPO / "bin" / "agtbox.py"
@@ -94,7 +93,7 @@ class LauncherTest(unittest.TestCase):
             else:
                 env[k] = v
         return subprocess.run([sys.executable, str(AGTBOX), *args],
-                              capture_output=True, text=True, env=env)
+                              capture_output=True, text=True, env=env, check=False)
 
     def launch(self, *args, **kw):
         """Run agtbox.py; return (returncode, argv_list, stderr). argv_list is the
@@ -325,7 +324,7 @@ class EngineSelect(LauncherTest):
         self.assertArg(argv, "--clearenv")
 
     def test_rebuild_flag_warns_under_bwrap(self):
-        rc, argv, err = self.launch("-b", "-t", "bwrap", "-a", str(self.app), "claude")
+        rc, _argv, err = self.launch("-b", "-t", "bwrap", "-a", str(self.app), "claude")
         self.assertEqual(rc, 0, err)
         self.assertIn("-b (rebuild) applies to the podman engine only", err)
 
@@ -341,19 +340,19 @@ class EngineSelect(LauncherTest):
 class ErrorCases(LauncherTest):
     # argparse owns flag/tool/engine validation: usage errors -> stderr, exit 2.
     def test_no_tool(self):
-        rc, _, err = self.launch("-t", "bwrap")
+        rc, _, _err = self.launch("-t", "bwrap")
         self.assertEqual(rc, 2)
 
     def test_unknown_tool(self):
-        rc, _, err = self.launch("frobnicate")
+        rc, _, _err = self.launch("frobnicate")
         self.assertEqual(rc, 2)
 
     def test_unknown_flag(self):
-        rc, _, err = self.launch("-Z", "claude")
+        rc, _, _err = self.launch("-Z", "claude")
         self.assertEqual(rc, 2)
 
     def test_bad_engine(self):
-        rc, _, err = self.launch("-t", "bogus", "claude")
+        rc, _, _err = self.launch("-t", "bogus", "claude")
         self.assertEqual(rc, 2)
 
     def test_missing_optarg(self):
@@ -484,7 +483,7 @@ class EnvForward(LauncherTest):
         os.path.islink("/etc/localtime") and "zoneinfo" in os.readlink("/etc/localtime"),
         "needs /etc/localtime -> .../zoneinfo/<zone>")
     def test_tz_derived_under_podman(self):
-        _, pd, err = self.launch("-t", "podman", "-a", str(self.app), "claude")
+        _, pd, _err = self.launch("-t", "podman", "-a", str(self.app), "claude")
         self.assertTrue([a for a in pd if a.startswith("TZ=")], "podman run should carry TZ")
 
 
@@ -627,6 +626,14 @@ class WorkflowDocs(unittest.TestCase):
         workflow = (REPO / ".github/workflows/lint.yml").read_text()
         self.assertIn("actions/setup-python", workflow)
         self.assertIn("python-version: '3.11'", workflow)
+
+    def test_test_suite_file_is_not_marked_executable(self):
+        mode = (REPO / "test/test_agtbox.py").stat().st_mode & 0o777
+        self.assertEqual(mode, 0o644)
+
+    def test_test_suite_does_not_have_a_shebang(self):
+        first_line = (REPO / "test/test_agtbox.py").read_text().splitlines()[0]
+        self.assertNotEqual(first_line, "#!/usr/bin/env python3")
 
 
 class EnsureSources(unittest.TestCase):
