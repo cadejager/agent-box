@@ -175,12 +175,13 @@ def bind_args(style):
     return args
 
 
-def _agt_env(narch, goarch):
+def _agt_env(narch, goarch, uvarch):
     """The AGT_* inputs the install here-doc reads (as (key, value) pairs)."""
     return [
         ("AGT_TOOLS", AGENT_TOOLS),
         ("AGT_NARCH", narch),
         ("AGT_GOARCH", goarch),
+        ("AGT_UVARCH", uvarch),
         ("AGT_NPM_PKGS", " ".join(NPM_PKGS)),
     ]
 
@@ -330,9 +331,13 @@ echo 'Agent Box: installing the agent CLIs...' >&2
 skipped=
 
 echo 'Agent Box: installing uv...' >&2
-{ curl -LsSf https://astral.sh/uv/install.sh \
-    | env UV_INSTALL_DIR="${AGT_TOOLS}/bin" UV_NO_MODIFY_PATH=1 sh; } \
-  || { echo 'Agent Box: WARNING -- uv install failed (astral.sh blocked?); skipping.' >&2; skipped="${skipped} uv"; }
+{ uvv=$(curl -fsSL https://api.github.com/repos/astral-sh/uv/releases/latest \
+       | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])') \
+  && curl -fsSL "https://github.com/astral-sh/uv/releases/download/${uvv}/uv-${AGT_UVARCH}-unknown-linux-gnu.tar.gz" \
+       | tar -xz -C /tmp \
+  && install -m755 "/tmp/uv-${AGT_UVARCH}-unknown-linux-gnu/uv" "${AGT_TOOLS}/bin/uv" \
+  && install -m755 "/tmp/uv-${AGT_UVARCH}-unknown-linux-gnu/uvx" "${AGT_TOOLS}/bin/uvx"; } \
+  || { echo 'Agent Box: WARNING -- uv install failed (github.com blocked?); skipping.' >&2; skipped="${skipped} uv"; }
 
 echo 'Agent Box: installing gh (GitHub CLI)...' >&2
 { gv=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest \
@@ -363,9 +368,9 @@ def arch_pair(machine):
     (node.js, and gh/glab respectively). Errors + exits 1 on an unsupported arch,
     mirroring the bash `return 1` followed by `|| exit 1` at every call site."""
     if machine == "aarch64":
-        return "arm64", "arm64"
+        return "arm64", "arm64", "aarch64"
     if machine == "x86_64":
-        return "x64", "amd64"
+        return "x64", "amd64", "x86_64"
     print(f"Error: unsupported architecture '{machine}'.", file=sys.stderr)
     sys.exit(1)
 
@@ -418,9 +423,9 @@ def install_via_bwrap():
     system ro, $HOME tmpfs) so the installer scripts can't touch the host. Arch is
     the host's -- bwrap is Linux-only, so host arch == run arch."""
     script = install_script()
-    narch, goarch = arch_pair(os.uname().machine)
+    narch, goarch, uvarch = arch_pair(os.uname().machine)
     bw = bwrap_common()
-    bw += _fmt_env("bwrap", _agt_env(narch, goarch))
+    bw += _fmt_env("bwrap", _agt_env(narch, goarch, uvarch))
     subprocess.run(["bwrap", *bw, "--", "/usr/bin/bash", "-c", script], check=True)
 
 
@@ -434,7 +439,7 @@ def install_via_podman():
         ["podman", "run", "--rm", IMAGE, "uname", "-m"],
         check=True, capture_output=True, text=True,
     ).stdout.strip()
-    narch, goarch = arch_pair(container_arch)
+    narch, goarch, uvarch = arch_pair(container_arch)
     # No --userns=keep-id: rootless podman already maps the container's root to the
     # invoking host user, so files written to the mounted toolchain are owned by you
     # AND $HOME is writable -- which opencode's postinstall needs (it runs the freshly
@@ -448,7 +453,7 @@ def install_via_podman():
     # resolves, and npm/pip/uv cache+prefix pointed at the mounted dirs (else npm
     # falls back to an unwritable ~/.npm) -- plus the install script's AGT_* inputs.
     # (AGENT_ENV only, as the bash does -- not the ENV_FORWARD/ENV_LITERAL allowlist.)
-    pd += _fmt_env("podman", [_kv(e) for e in AGENT_ENV] + _agt_env(narch, goarch))
+    pd += _fmt_env("podman", [_kv(e) for e in AGENT_ENV] + _agt_env(narch, goarch, uvarch))
     subprocess.run(["podman", *pd, "--", IMAGE, "/usr/bin/bash", "-c", script], check=True)
 
 
@@ -524,8 +529,8 @@ def build_image():
     toolchain (~/.local/share/agent-box), so a rebuild never disturbs them."""
     if REBUILD:
         subprocess.run(["podman", "image", "rm", IMAGE],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    exists = subprocess.run(["podman", "image", "exists", IMAGE]).returncode == 0
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    exists = subprocess.run(["podman", "image", "exists", IMAGE], check=False).returncode == 0
     if not exists:
         print(f"Agent Box: building the {IMAGE} image (one-time)...", file=sys.stderr)
         refresh_certs()
