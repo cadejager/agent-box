@@ -73,6 +73,7 @@ class Bwrap(Sandbox):
             "--clearenv",
             "--ro-bind", "/usr", "/usr", "--ro-bind", "/etc", "/etc",
             "--ro-bind-try", resolv, resolv,
+            "--ro-bind-try", "/udsl", "/udsl",
             "--ro-bind", f"{core.AGENT_STATE}/passwd", "/etc/passwd",
             "--ro-bind", f"{core.AGENT_STATE}/group", "/etc/group",
             "--ro-bind-try", "/var/lib/ca-certificates", "/var/lib/ca-certificates",
