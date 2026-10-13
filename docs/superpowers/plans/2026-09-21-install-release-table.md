@@ -540,7 +540,7 @@ Expected: OK, 94 tests (`AgtEnv` gained a test)
 - [ ] **Step 5: Eyeball the generated script once**
 
 Run: `python3 -c "from agtbox import install; print(install.install_script('x86_64'))"`
-Expected: four `readonly *_API`/`*_URL` pairs with `x86_64`/`amd64`/`x64` substituted, four indented `install_tree`/`install_bins` calls inside the `AGT_DO_CORE` gate, and no `{`/`}` anywhere.
+Expected: four `readonly *_API`/`*_URL` pairs with `x86_64`/`amd64`/`x64` substituted, and four indented `install_tree`/`install_bins` calls inside the `AGT_DO_CORE` gate. (Do not expect the script to be brace-free — it is full of `${AGT_TOOLS}` and bash function bodies. The no-Python-placeholder guard lives in Task 2's `test_no_python_placeholders_survive`, which checks `render()` output only.)
 
 - [ ] **Step 6: Commit**
 
@@ -711,6 +711,6 @@ git commit -m "docs: describe the releases table and the GitHub-sourced uv insta
 ## Done criteria
 
 - `python3 -m unittest discover -s test` passes (96 tests).
-- `python3 -c "from agtbox import install; print(install.install_script('aarch64'))"` shows `arm64`/`aarch64` substituted and contains no `{`/`}`.
+- `python3 -c "from agtbox import releases; print(releases.render('aarch64'))"` shows `arm64`/`aarch64` substituted and contains no `{`/`}`.
 - `grep -rn 'astral\.sh' .` returns nothing outside `docs/` and `.git/`.
 - The branch is ready for a PR against `plugin-architecture`.
