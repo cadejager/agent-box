@@ -703,8 +703,16 @@ repeating it in the quick start would just be noise.)
 
 - [ ] **Step 3: Verify no stale references remain**
 
-Run: `grep -rn 'astral\.sh\|arch_pair\|AGT_NARCH\|AGT_GOARCH\|AGT_UVARCH' README.md CLAUDE.md agtbox/ test/`
-Expected: no output.
+Run: `grep -rn 'arch_pair\|AGT_NARCH\|AGT_GOARCH\|AGT_UVARCH' README.md CLAUDE.md agtbox/`
+Expected: no output. (Scoped to `agtbox/`, not `test/`: `test/test_install.py` asserts
+`AGT_NARCH`/`AGT_GOARCH` are *absent* from the install env, and those two `assertNotIn`
+lines are correct.)
+
+Then check `astral.sh` by inspection rather than by grep: `grep -rn 'astral' README.md CLAUDE.md`
+should show exactly one hit, CLAUDE.md's contrastive clause "not the `astral.sh` bootstrap —
+locked-down hosts commonly reach GitHub but not `astral.sh`". That mention is the documented
+rationale for the change and must STAY; what must be gone is any claim that uv is *installed
+from* astral.sh.
 
 - [ ] **Step 4: Run the full suite one more time**
 
@@ -723,6 +731,9 @@ git commit -m "docs: describe the releases table and the GitHub-sourced uv insta
 ## Done criteria
 
 - `python3 -m unittest discover -s test` passes (97 tests).
-- `python3 -c "from agtbox import releases; print(releases.render('aarch64'))"` shows `arm64`/`aarch64` substituted and contains no `{`/`}`.
-- `grep -rn 'astral\.sh' .` returns nothing outside `docs/` and `.git/`.
+- `python3 -c "from agtbox import releases; print(releases.render('aarch64'))"` shows `arm64`/`aarch64`
+  substituted, and contains no Python format placeholder *once bash `${VAR}` references are stripped* —
+  node's `dest` legitimately renders as `"${AGT_TOOLS}/node"`. This is exactly the check
+  `test_no_python_placeholders_survive` performs; do not expect the raw output to be brace-free.
+- `grep -rn 'astral' README.md CLAUDE.md` returns exactly one hit: CLAUDE.md's contrastive clause explaining why uv moved off the bootstrap script.
 - The branch is ready for a PR against `plugin-architecture`.
