@@ -91,6 +91,7 @@ agtbox/
   cli.py                  # entry point: argparse, discover, resolve, run
   core.py                 # constants, Bind type, env tables, shared helpers
   install.py              # ensure_tools + install_script
+  releases.py             # the downloadable-tool table (node, uv, gh, glab)
   context.py              # RunContext dataclass
   discovery.py            # discover_agents / discover_sandboxes
   agents/
@@ -108,7 +109,14 @@ bin/
 container/
   Containerfile           # the podman sandbox's image (debian:trixie + runtime/build packages)
 test/
-  test_agtbox.py          # unittest suite: stub-sandbox integration + unit tests
+  test_agtbox.py          # stub-sandbox integration tests
+  test_cli.py             # argv split, argparse, sandbox resolution
+  test_core.py            # paths, Bind, arch_names, env tables
+  test_install.py         # install-script assembly + end-to-end skip path
+  test_releases.py        # the downloadable-tool table
+  test_agents.py          # agent plugins
+  test_sandboxes.py       # sandbox plugins
+  test_discovery.py       # plugin discovery
 .github/workflows/
   lint.yml                # CI: ruff + the Python test suite
 CLAUDE.md                 # terse architecture reference (for AI assistants)
