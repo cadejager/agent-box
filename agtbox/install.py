@@ -51,11 +51,11 @@ fi
 
 
 def agt_env(agent, do_core, machine):
-    narch, goarch = core.arch_pair(machine)
+    names = core.arch_names(machine)
     return [
         ("AGT_TOOLS", core.AGENT_TOOLS),
-        ("AGT_NARCH", narch),
-        ("AGT_GOARCH", goarch),
+        ("AGT_NARCH", names["narch"]),
+        ("AGT_GOARCH", names["goarch"]),
         ("AGT_NPM_PKGS", " ".join(agent.packages)),
         ("AGT_DO_CORE", "1" if do_core else "0"),
     ]
