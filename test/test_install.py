@@ -1,6 +1,9 @@
+import os
 import shutil
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from agtbox import install
 
 
@@ -70,6 +73,71 @@ class InstallEnvContents(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=True):
             pairs = dict(install.install_env(Claude(), True))
         self.assertNotIn("HTTPS_PROXY", pairs)                       # unset -> not forwarded
+
+
+class SkipPathEndToEnd(unittest.TestCase):
+    """Run the real generated script with curl/tar stubbed: nodejs.org answers, the
+    auxiliary hosts fail. The script must warn, skip all three, still write .stamp,
+    and exit 0 -- otherwise a blocked host stops the core toolchain completing."""
+
+    def _stub_dir(self, tmp):
+        stub = tmp / "stub"
+        stub.mkdir()
+        # curl: serve node's index.json, fail (7) for anything else.
+        (stub / "curl").write_text(
+            '#!/bin/sh\n'
+            'for a in "$@"; do\n'
+            '  case "$a" in\n'
+            '    *nodejs.org*) echo \'[{"version":"v20.0.0","lts":"Iron"}]\'; exit 0 ;;\n'
+            '  esac\n'
+            'done\n'
+            'exit 7\n')
+        # tar: accept whatever it is handed, so node's "download" succeeds.
+        (stub / "tar").write_text('#!/bin/sh\nexit 0\n')
+        for f in ("curl", "tar"):
+            (stub / f).chmod(0o755)
+        return stub
+
+    def test_blocked_aux_hosts_warn_and_still_stamp(self):
+        bash = shutil.which("bash") or "/bin/bash"
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        stub = self._stub_dir(tmp)
+        tools = tmp / "tools"
+        (tools / "bin").mkdir(parents=True)
+        env = {**os.environ,
+               "PATH": f"{stub}:{os.environ['PATH']}",
+               "AGT_TOOLS": str(tools),
+               "AGT_NPM_PKGS": "",
+               "AGT_DO_CORE": "1"}
+        r = subprocess.run([bash, "-c", install.install_script("x86_64")],
+                           capture_output=True, text=True, env=env, check=False)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for tool in ("uv", "gh", "glab"):
+            self.assertIn(f"WARNING -- {tool} install failed", r.stderr)
+        self.assertNotIn("WARNING -- node", r.stderr)         # node succeeded
+        self.assertIn("skipped: uv gh glab", r.stderr)
+        self.assertTrue((tools / ".stamp").exists(), r.stderr)
+
+    def test_warning_names_the_resolution_host(self):
+        # Derived from the API URL, so it cannot drift: uv must blame api.github.com,
+        # not astral.sh and not github.com.
+        bash = shutil.which("bash") or "/bin/bash"
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        stub = self._stub_dir(tmp)
+        tools = tmp / "tools"
+        (tools / "bin").mkdir(parents=True)
+        env = {**os.environ,
+               "PATH": f"{stub}:{os.environ['PATH']}",
+               "AGT_TOOLS": str(tools),
+               "AGT_NPM_PKGS": "",
+               "AGT_DO_CORE": "1"}
+        r = subprocess.run([bash, "-c", install.install_script("x86_64")],
+                           capture_output=True, text=True, env=env, check=False)
+        self.assertIn("uv install failed (api.github.com blocked?)", r.stderr)
+        self.assertIn("glab install failed (gitlab.com blocked?)", r.stderr)
+        self.assertNotIn("astral.sh", r.stderr)
 
 
 if __name__ == "__main__":
