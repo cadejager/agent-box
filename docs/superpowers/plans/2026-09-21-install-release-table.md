@@ -120,7 +120,9 @@ git commit -m "refactor(core): arch_pair -> arch_names returning a dict"
 Create `test/test_releases.py`:
 
 ```python
+import re
 import unittest
+
 from agtbox import releases
 
 
@@ -168,13 +170,23 @@ class Render(unittest.TestCase):
         self.assertIn("node-@VER@-linux-arm64.tar.xz", releases.render("aarch64")[0])
 
     def test_no_python_placeholders_survive(self):
-        # A typo like {uarch} for {uvarch} would otherwise only surface as a 404 on
-        # a user's first cold install. @VER@/@VERNOV@ use no braces, so a brace scan
-        # is exact.
+        # Guards against a typo like {uarch} for {uvarch}, which would otherwise only
+        # surface as a 404 on a user's first cold install. Bash's own ${VAR} braces are
+        # stripped first: those are MEANT to survive into the script, where bash expands
+        # them. Only a leftover Python format placeholder is a defect here.
         for machine in ("x86_64", "aarch64"):
             consts, calls = releases.render(machine)
-            self.assertNotIn("{", consts + calls, machine)
-            self.assertNotIn("}", consts + calls, machine)
+            blob = re.sub(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", "", consts + calls)
+            self.assertNotIn("{", blob, machine)
+            self.assertNotIn("}", blob, machine)
+
+    def test_node_dest_is_a_bash_variable_reference(self):
+        # ${AGT_TOOLS} must reach the script intact -- nothing substitutes @AGT_TOOLS@,
+        # so a literal would extract node into a directory of that name and leave
+        # ${AGT_TOOLS}/node/bin/npm missing.
+        node = next(t for t in releases.TOOLS if t.name == "node")
+        self.assertEqual(node.dest, "${AGT_TOOLS}/node")
+        self.assertIn('"${AGT_TOOLS}/node"', releases.render("x86_64")[1])
 
     def test_calls_use_the_right_mode_per_tool(self):
         calls = releases.render("x86_64")[1]
@@ -299,12 +311,12 @@ def render(machine):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python3 -m unittest test.test_releases -v`
-Expected: PASS, 10 tests
+Expected: PASS, 11 tests
 
 - [ ] **Step 5: Run the full suite (nothing else should have moved)**
 
 Run: `python3 -m unittest discover -s test`
-Expected: OK, 93 tests
+Expected: OK, 94 tests
 
 - [ ] **Step 6: Commit**
 
