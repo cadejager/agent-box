@@ -45,7 +45,7 @@ TOOLS = (
         where="lts",
         tag_field="version",
         url="https://nodejs.org/dist/@VER@/node-@VER@-linux-{narch}.tar.xz",
-        dest="@AGT_TOOLS@/node",
+        dest="${AGT_TOOLS}/node",
     ),
     Release(
         name="uv",
