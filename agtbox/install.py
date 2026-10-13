@@ -70,10 +70,16 @@ _warn_skip() {  # name  api
   skipped="${skipped} $1"
 }
 
+_fail() {  # name  api
+  local host=${2#https://}; host=${host%%/*}
+  echo "Agent Box: ERROR -- $1 install failed (${host} unreachable?)." >&2
+}
+
 install_tree() {  # name required api where field url dest
   local name=$1 req=$2; shift 2
+  echo "Agent Box: installing ${name}..." >&2
   _try_tree "$@" && return 0
-  [ "$req" = required ] && return 1
+  if [ "$req" = required ]; then _fail "$name" "$1"; return 1; fi
   _warn_skip "$name" "$1"
   return 0
 }
@@ -81,8 +87,9 @@ install_tree() {  # name required api where field url dest
 install_bins() {  # name required api where field url src:dst...
   local name=$1 req=$2; shift 2
   local api=$1 where=$2 field=$3 tmpl=$4; shift 4
+  echo "Agent Box: installing ${name}..." >&2
   _try_bins "$api" "$where" "$field" "$tmpl" "${WORK}/${name}" "$@" && return 0
-  [ "$req" = required ] && return 1
+  if [ "$req" = required ]; then _fail "$name" "$api"; return 1; fi
   _warn_skip "$name" "$api"
   return 0
 }
@@ -109,8 +116,8 @@ fi
 
 def install_script(machine):
     """The install script for `machine`, assembled from the releases table. Arch is
-    substituted here, so no arch env var crosses into the sandbox; only @VER@ is
-    left for bash, since the version is resolved inside the sandbox."""
+    substituted here, so no arch env var crosses into the sandbox; only @VER@ and
+    @VERNOV@ are left for bash, since the version is resolved inside the sandbox."""
     consts, calls = releases.render(machine)
     return (_SCRIPT
             .replace("@CONSTS@", consts)

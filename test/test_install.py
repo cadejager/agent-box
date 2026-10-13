@@ -9,8 +9,9 @@ from agtbox import install
 
 class InstallScript(unittest.TestCase):
     def test_is_syntactically_valid_bash(self):
-        # install_script() is a ~40-line hand-maintained shell string; a stray quote
-        # would break first-run install for every user and no other test would notice.
+        # install_script() is assembled from the releases.py table; a stray quote in
+        # the template or a row would still break first-run install for every user
+        # and no other test would notice.
         # `bash -n` parses without executing (no network/downloads).
         bash = shutil.which("bash") or "/bin/bash"
         r = subprocess.run([bash, "-n", "-c", install.install_script("x86_64")],
@@ -93,7 +94,9 @@ class SkipPathEndToEnd(unittest.TestCase):
             'done\n'
             'exit 7\n')
         # tar: accept whatever it is handed, so node's "download" succeeds.
-        (stub / "tar").write_text('#!/bin/sh\nexit 0\n')
+        # Must drain stdin: a consumer that exits early gives the upstream `echo` in
+        # the stub curl a SIGPIPE, pipefail fails the pipeline, and the test is racy.
+        (stub / "tar").write_text('#!/bin/sh\ncat >/dev/null\nexit 0\n')
         for f in ("curl", "tar"):
             (stub / f).chmod(0o755)
         return stub
@@ -138,6 +141,41 @@ class SkipPathEndToEnd(unittest.TestCase):
         self.assertIn("uv install failed (api.github.com blocked?)", r.stderr)
         self.assertIn("glab install failed (gitlab.com blocked?)", r.stderr)
         self.assertNotIn("astral.sh", r.stderr)
+
+    def test_progress_lines_are_emitted(self):
+        r, _ = self._run(self._stub_dir)
+        for tool in ("node", "uv", "gh", "glab"):
+            self.assertIn(f"installing {tool}", r.stderr)
+
+    def test_required_failure_is_loud_and_unstamped(self):
+        def stubs(tmp):
+            stub = tmp / "stub"
+            stub.mkdir()
+            (stub / "curl").write_text('#!/bin/sh\nexit 7\n')
+            (stub / "tar").write_text('#!/bin/sh\ncat >/dev/null\nexit 0\n')
+            for f in ("curl", "tar"):
+                (stub / f).chmod(0o755)
+            return stub
+        r, tools = self._run(stubs)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("ERROR -- node install failed", r.stderr)
+        self.assertFalse((tools / ".stamp").exists())
+
+    def _run(self, make_stubs):
+        bash = shutil.which("bash") or "/bin/bash"
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        stub = make_stubs(tmp)
+        tools = tmp / "tools"
+        (tools / "bin").mkdir(parents=True)
+        env = {**os.environ,
+               "PATH": f"{stub}:{os.environ['PATH']}",
+               "AGT_TOOLS": str(tools),
+               "AGT_NPM_PKGS": "",
+               "AGT_DO_CORE": "1"}
+        r = subprocess.run([bash, "-c", install.install_script("x86_64")],
+                           capture_output=True, text=True, env=env, check=False)
+        return r, tools
 
 
 if __name__ == "__main__":
