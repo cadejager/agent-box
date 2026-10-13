@@ -547,7 +547,7 @@ And the tail of `ensure_tools`, which must now resolve the machine once — unde
 - [ ] **Step 4: Run the full suite**
 
 Run: `python3 -m unittest discover -s test`
-Expected: OK, 94 tests (`AgtEnv` gained a test)
+Expected: OK, 95 tests (`AgtEnv` gained a test)
 
 - [ ] **Step 5: Eyeball the generated script once**
 
@@ -652,7 +652,7 @@ Expected: PASS, 2 tests. If they fail on exit status, read stderr — the usual 
 - [ ] **Step 3: Run the full suite**
 
 Run: `python3 -m unittest discover -s test`
-Expected: OK, 96 tests
+Expected: OK, 97 tests
 
 - [ ] **Step 4: Commit**
 
@@ -709,7 +709,7 @@ Expected: no output.
 - [ ] **Step 4: Run the full suite one more time**
 
 Run: `python3 -m unittest discover -s test`
-Expected: OK, 96 tests
+Expected: OK, 97 tests
 
 - [ ] **Step 5: Commit**
 
@@ -722,7 +722,7 @@ git commit -m "docs: describe the releases table and the GitHub-sourced uv insta
 
 ## Done criteria
 
-- `python3 -m unittest discover -s test` passes (96 tests).
+- `python3 -m unittest discover -s test` passes (97 tests).
 - `python3 -c "from agtbox import releases; print(releases.render('aarch64'))"` shows `arm64`/`aarch64` substituted and contains no `{`/`}`.
 - `grep -rn 'astral\.sh' .` returns nothing outside `docs/` and `.git/`.
 - The branch is ready for a PR against `plugin-architecture`.
