@@ -244,6 +244,20 @@ class Tools(LauncherTest):
         for word in ("--continue", "--resume", "--fork-session"):
             self.assertNoArg(argv, word)
 
+    def test_opencode_setup_runs_before_launch(self):
+        rc, argv, err = self.launch("-s", "bwrap", "-a", str(self.app), "opencode")
+        self.assertEqual(rc, 0, err)
+        oc = str(self.tools / "bin/opencode")
+        first = argv.index(oc)
+        self.assertEqual(argv[first:first + 5], [oc, "service", "set", "disabled", "true"])
+        self.assertEqual(argv.count(oc), 2)          # setup run, then the agent run
+        self.assertEqual(argv[-2:], [oc, "--standalone"])
+
+    def test_claude_has_no_setup_run(self):
+        rc, argv, err = self.launch("-s", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(argv.count(str(self.tools / "bin/claude")), 1)
+
     def test_opencode_launched_standalone(self):
         rc, argv, err = self.launch("-s", "bwrap", "-a", str(self.app),
                                     "opencode", "--", "--continue")

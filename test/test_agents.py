@@ -47,6 +47,11 @@ class AgentContract(unittest.TestCase):
         for cls in (Claude, Codex, Bash):
             self.assertEqual(cls().obsolete_packages, ())
 
+    def test_opencode_disables_service(self):
+        self.assertEqual(Opencode().setup_args, ("service", "set", "disabled", "true"))
+        for cls in (Claude, Codex, Bash):
+            self.assertEqual(cls().setup_args, ())
+
     def test_opencode_standalone_by_default(self):
         self.assertEqual(Opencode().default_args, ("--standalone",))
         for cls in (Claude, Codex, Bash):

@@ -43,6 +43,39 @@ class BindArgs(unittest.TestCase):
         self.assertIn("B:/ro>/ro:ro", out)
 
 
+class RunSetup(unittest.TestCase):
+    def _ctx(self, agent):
+        from agtbox.core import Bind
+        return RunContext(agent=agent, binds=[Bind("/cfg/oc", "/h/.config/opencode")],
+                          env=[], app_dir="/app", extra_args=["--continue"])
+
+    def test_runs_setup_command_with_config_binds(self):
+        from agtbox.agents.opencode import Opencode
+        ctx = self._ctx(Opencode())
+        with mock.patch("agtbox.sandboxes.base.subprocess.run",
+                        return_value=types.SimpleNamespace(returncode=0)) as run:
+            FakeSandbox().run_setup(ctx)
+        argv = run.call_args.args[0]
+        self.assertIn("B:/cfg/oc>/h/.config/opencode", argv)
+        self.assertEqual(argv[-5:], [ctx.agent.bin, "service", "set", "disabled", "true"])
+        self.assertNotIn("--standalone", argv)
+        self.assertNotIn("--continue", argv)
+
+    def test_noop_without_setup_args(self):
+        from agtbox.agents.claude import Claude
+        with mock.patch("agtbox.sandboxes.base.subprocess.run") as run:
+            FakeSandbox().run_setup(self._ctx(Claude()))
+        run.assert_not_called()
+
+    def test_failure_warns_and_continues(self):
+        from agtbox.agents.opencode import Opencode
+        with mock.patch("agtbox.sandboxes.base.subprocess.run",
+                        return_value=types.SimpleNamespace(returncode=1)), \
+             mock.patch("sys.stderr") as err:
+            FakeSandbox().run_setup(self._ctx(Opencode()))
+        self.assertIn("warning", "".join(c.args[0] for c in err.write.call_args_list))
+
+
 class BwrapArgv(unittest.TestCase):
     def _ctx(self):
         from agtbox.context import RunContext

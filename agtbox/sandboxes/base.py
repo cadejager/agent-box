@@ -1,5 +1,7 @@
 import os
 import shutil
+import subprocess
+import sys
 from abc import ABC, abstractmethod
 
 
@@ -49,3 +51,11 @@ class Sandbox(ABC):
     def run(self, ctx):
         argv = self.build_run_argv(ctx)
         os.execvp(argv[0], argv)
+
+    def run_setup(self, ctx):
+        if not ctx.agent.setup_args:
+            return
+        argv = self.build_run_argv(ctx, [ctx.agent.bin, *ctx.agent.setup_args])
+        if subprocess.run(argv).returncode != 0:
+            print(f"Agent Box: warning: `{ctx.agent.name} {' '.join(ctx.agent.setup_args)}` "
+                  "failed; launching anyway.", file=sys.stderr)

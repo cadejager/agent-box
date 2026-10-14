@@ -70,4 +70,5 @@ def main(argv=None):
         sandbox.rebuild()
     sandbox.prepare(ctx)
     ensure_tools(agent, sandbox, force=ns.update)
+    sandbox.run_setup(ctx)
     sandbox.run(ctx)

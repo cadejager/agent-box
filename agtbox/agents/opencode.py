@@ -7,6 +7,7 @@ class Opencode(Agent):
     packages = ("@opencode/cli",)
     obsolete_packages = ("opencode-ai",)
     default_args = ("--standalone",)
+    setup_args = ("service", "set", "disabled", "true")
     env_forward = ("OPENCODE_ENABLE_EXA",)
     env_literal = ("OPENCODE_EXPERIMENTAL_LSP_TOOL=true",)
 

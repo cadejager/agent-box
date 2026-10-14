@@ -10,6 +10,7 @@ class Agent(ABC):
     packages = ()
     obsolete_packages = ()
     default_args = ()
+    setup_args = ()
     env_forward = ()
     env_literal = ()
 
