@@ -20,10 +20,24 @@ class Table(unittest.TestCase):
         uv = next(t for t in releases.TOOLS if t.name == "uv")
         self.assertEqual(sorted(b.split(":")[1] for b in uv.bins), ["uv", "uvx"])
 
-    def test_uv_resolves_from_the_github_api(self):
+    def test_uv_skips_the_github_api(self):
+        # uv's asset names are version-free, so releases/latest/download/ needs no
+        # api.github.com lookup (a separate allowlist entry, rate-limited 60/h).
         uv = next(t for t in releases.TOOLS if t.name == "uv")
-        self.assertEqual(uv.api,
-                         "https://api.github.com/repos/astral-sh/uv/releases/latest")
+        self.assertEqual(uv.api, "")
+        self.assertIn("github.com/astral-sh/uv/releases/latest/download/", uv.url)
+        self.assertNotIn("@VER", uv.url + "".join(uv.bins))
+
+    def test_no_tool_uses_an_api_host(self):
+        # gh/glab resolve via the releases/latest redirect on the web host, so a
+        # locked-down network needs only github.com/gitlab.com (plus nodejs.org).
+        for t in releases.TOOLS:
+            self.assertNotIn("api.github.com", t.api, t.name)
+            self.assertNotIn("/api/v4/", t.api, t.name)
+        by_name = {t.name: t for t in releases.TOOLS}
+        for name in ("gh", "glab"):
+            self.assertTrue(by_name[name].api.endswith("/latest"), name)
+            self.assertEqual(by_name[name].tag_field, "", name)
 
     def test_nothing_references_the_astral_bootstrap_host(self):
         # The whole point of the change: locked-down hosts reach GitHub, not astral.sh.

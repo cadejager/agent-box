@@ -22,15 +22,21 @@ from agtbox import core
 class Release:
     """One downloadable tool.
 
-    `where` names a key a JSON row must have truthy to be chosen (node's "lts");
-    empty means take the first row. `dest` selects tree mode (extract in place,
-    --strip-components=1); `bins` selects bins mode ("src-in-tarball:dest-name").
-    Exactly one of the two is set.
+    `api` is where the version comes from, read one of three ways:
+      - empty: nothing to resolve; `url` is a version-free `releases/latest/download/`
+        link (uv).
+      - with `tag_field` empty: a `releases/latest` page whose redirect target ends
+        in the tag (gh, glab). This goes to the web host, so there is no separate API
+        host to allowlist and no api.github.com 60/hour anonymous rate limit.
+      - with `tag_field` set: a JSON API, read by key (node). `where` names a key a
+        row must have truthy to be chosen (node's "lts"); empty means the first row.
+    `dest` selects tree mode (extract in place, --strip-components=1); `bins` selects
+    bins mode ("src-in-tarball:dest-name"). Exactly one of the two is set.
     """
     name: str
-    api: str
-    tag_field: str
     url: str
+    api: str = ""
+    tag_field: str = ""
     where: str = ""
     required: bool = False
     dest: str = ""
@@ -49,25 +55,21 @@ TOOLS = (
     ),
     Release(
         name="uv",
-        api="https://api.github.com/repos/astral-sh/uv/releases/latest",
-        tag_field="tag_name",
-        url="https://github.com/astral-sh/uv/releases/download/@VER@/"
+        url="https://github.com/astral-sh/uv/releases/latest/download/"
             "uv-{uvarch}-unknown-linux-gnu.tar.gz",
         bins=("uv-{uvarch}-unknown-linux-gnu/uv:uv",
               "uv-{uvarch}-unknown-linux-gnu/uvx:uvx"),
     ),
     Release(
         name="gh",
-        api="https://api.github.com/repos/cli/cli/releases/latest",
-        tag_field="tag_name",
+        api="https://github.com/cli/cli/releases/latest",
         url="https://github.com/cli/cli/releases/download/@VER@/"
             "gh_@VERNOV@_linux_{goarch}.tar.gz",
         bins=("gh_@VERNOV@_linux_{goarch}/bin/gh:gh",),
     ),
     Release(
         name="glab",
-        api="https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases",
-        tag_field="tag_name",
+        api="https://gitlab.com/gitlab-org/cli/-/releases/permalink/latest",
         url="https://gitlab.com/gitlab-org/cli/-/releases/@VER@/downloads/"
             "glab_@VERNOV@_linux_{goarch}.tar.gz",
         bins=("bin/glab:glab",),
@@ -88,7 +90,7 @@ def render(machine):
         consts.append(f"readonly {up}_API='{t.api}'")
         consts.append(f"readonly {up}_URL='{t.url.format(**names)}'")
         req = "required" if t.required else "optional"
-        head = (f'{t.name} {req} "${up}_API" "{t.where}" {t.tag_field} "${up}_URL"')
+        head = (f'{t.name} {req} "${up}_API" "{t.where}" "{t.tag_field}" "${up}_URL"')
         if t.dest:
             calls.append(f'install_tree {head} "{t.dest}"')
         else:

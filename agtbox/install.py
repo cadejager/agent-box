@@ -11,10 +11,21 @@ trap 'rm -rf "${WORK}"' EXIT
 
 @CONSTS@
 
-# One resolver for every tool: rows may be a dict (gh) or a list (glab, node), and
-# `where` optionally names a key the chosen row must have truthy (node's "lts").
-# python3 stderr is dropped so a blocked host yields our warning, not a traceback.
+# One resolver for every tool (modes documented on releases.Release). In redirect
+# mode the tag must look like a version, so a landing page that isn't a release
+# (e.g. a repo with no releases) fails here rather than as a confusing 404 later.
+# JSON mode: rows may be a dict or a list; `where` optionally names a key the
+# chosen row must have truthy (node's "lts"). python3 stderr is dropped so a
+# blocked host yields our warning, not a traceback.
 resolve() {  # api  where_key  field
+  [ -z "$1" ] && return 0
+  if [ -z "$3" ]; then
+    local url tag
+    url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$1") || return 1
+    tag=${url##*/}
+    case $tag in v[0-9]*|[0-9]*) printf '%s\n' "$tag" ;; *) return 1 ;; esac
+    return 0
+  fi
   curl -fsSL "$1" | WHERE="$2" FIELD="$3" python3 -c '
 import json, os, sys
 rows = json.load(sys.stdin)
@@ -61,16 +72,15 @@ _try_bins() {  # api where field url_tmpl dir  src:dst...
   done
 }
 
-# The blocked-host hint is derived from the API URL so it cannot drift from the URL
-# it describes. Note this names the *resolution* host (api.github.com), which is the
-# one that must be reachable even when the download host is fine.
-_warn_skip() {  # name  api
+# The blocked-host hint is derived from the first URL fetched (the API, else the
+# download URL) so it cannot drift from the URL it describes.
+_warn_skip() {  # name  url
   local host=${2#https://}; host=${host%%/*}
   echo "Agent Box: WARNING -- $1 install failed (${host} blocked?); skipping." >&2
   skipped="${skipped} $1"
 }
 
-_fail() {  # name  api
+_fail() {  # name  url
   local host=${2#https://}; host=${host%%/*}
   echo "Agent Box: ERROR -- $1 install failed (${host} unreachable?)." >&2
 }
@@ -79,8 +89,8 @@ install_tree() {  # name required api where field url dest
   local name=$1 req=$2; shift 2
   echo "Agent Box: installing ${name}..." >&2
   _try_tree "$@" && return 0
-  if [ "$req" = required ]; then _fail "$name" "$1"; return 1; fi
-  _warn_skip "$name" "$1"
+  if [ "$req" = required ]; then _fail "$name" "${1:-$4}"; return 1; fi
+  _warn_skip "$name" "${1:-$4}"
   return 0
 }
 
@@ -89,8 +99,8 @@ install_bins() {  # name required api where field url src:dst...
   local api=$1 where=$2 field=$3 tmpl=$4; shift 4
   echo "Agent Box: installing ${name}..." >&2
   _try_bins "$api" "$where" "$field" "$tmpl" "${WORK}/${name}" "$@" && return 0
-  if [ "$req" = required ]; then _fail "$name" "$api"; return 1; fi
-  _warn_skip "$name" "$api"
+  if [ "$req" = required ]; then _fail "$name" "${api:-$tmpl}"; return 1; fi
+  _warn_skip "$name" "${api:-$tmpl}"
   return 0
 }
 

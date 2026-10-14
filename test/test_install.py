@@ -76,6 +76,36 @@ class InstallEnvContents(unittest.TestCase):
         self.assertNotIn("HTTPS_PROXY", pairs)                       # unset -> not forwarded
 
 
+class ResolveRedirect(unittest.TestCase):
+    """resolve() in redirect mode: the tag is the last path segment of where
+    releases/latest lands, and a non-version landing page is a failure."""
+
+    def _resolve(self, landing):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        (tmp / "curl").write_text(f"#!/bin/sh\nprintf '%s' '{landing}'\n")
+        (tmp / "curl").chmod(0o755)
+        env = {**os.environ, "PATH": f"{tmp}:{os.environ['PATH']}",
+               "AGT_TOOLS": str(tmp / "tools"), "AGT_NPM_PKGS": "", "AGT_DO_CORE": "0"}
+        script = install.install_script("x86_64") + '\nresolve "https://x/releases/latest" "" ""\n'
+        return subprocess.run([shutil.which("bash") or "/bin/bash", "-c", script],
+                              capture_output=True, text=True, env=env, check=False)
+
+    def test_tag_is_last_segment_of_redirect(self):
+        r = self._resolve("https://github.com/cli/cli/releases/tag/v2.102.0")
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "v2.102.0"), r.stderr)
+
+    def test_unversioned_tag_is_accepted(self):
+        r = self._resolve("https://github.com/astral-sh/uv/releases/tag/0.13.0")
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "0.13.0"), r.stderr)
+
+    def test_non_release_landing_fails(self):
+        # A repo without releases redirects to .../releases, not .../tag/<v>.
+        r = self._resolve("https://github.com/cli/cli/releases")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(r.stdout, "")
+
+
 class SkipPathEndToEnd(unittest.TestCase):
     """Run the real generated script with curl/tar stubbed: nodejs.org answers, the
     auxiliary hosts fail. The script must warn, skip all three, still write .stamp,
@@ -102,19 +132,7 @@ class SkipPathEndToEnd(unittest.TestCase):
         return stub
 
     def test_blocked_aux_hosts_warn_and_still_stamp(self):
-        bash = shutil.which("bash") or "/bin/bash"
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        stub = self._stub_dir(tmp)
-        tools = tmp / "tools"
-        (tools / "bin").mkdir(parents=True)
-        env = {**os.environ,
-               "PATH": f"{stub}:{os.environ['PATH']}",
-               "AGT_TOOLS": str(tools),
-               "AGT_NPM_PKGS": "",
-               "AGT_DO_CORE": "1"}
-        r = subprocess.run([bash, "-c", install.install_script("x86_64")],
-                           capture_output=True, text=True, env=env, check=False)
+        r, tools = self._run(self._stub_dir)
         self.assertEqual(r.returncode, 0, r.stderr)
         for tool in ("uv", "gh", "glab"):
             self.assertIn(f"WARNING -- {tool} install failed", r.stderr)
@@ -122,23 +140,12 @@ class SkipPathEndToEnd(unittest.TestCase):
         self.assertIn("skipped: uv gh glab", r.stderr)
         self.assertTrue((tools / ".stamp").exists(), r.stderr)
 
-    def test_warning_names_the_resolution_host(self):
-        # Derived from the API URL, so it cannot drift: uv must blame api.github.com,
-        # not astral.sh and not github.com.
-        bash = shutil.which("bash") or "/bin/bash"
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        stub = self._stub_dir(tmp)
-        tools = tmp / "tools"
-        (tools / "bin").mkdir(parents=True)
-        env = {**os.environ,
-               "PATH": f"{stub}:{os.environ['PATH']}",
-               "AGT_TOOLS": str(tools),
-               "AGT_NPM_PKGS": "",
-               "AGT_DO_CORE": "1"}
-        r = subprocess.run([bash, "-c", install.install_script("x86_64")],
-                           capture_output=True, text=True, env=env, check=False)
-        self.assertIn("uv install failed (api.github.com blocked?)", r.stderr)
+    def test_warning_names_the_first_host_contacted(self):
+        # Derived from the URLs, so it cannot drift: each tool blames the first host
+        # it contacts. None goes through an API host any more -- never astral.sh.
+        r, _ = self._run(self._stub_dir)
+        self.assertIn("gh install failed (github.com blocked?)", r.stderr)
+        self.assertIn("uv install failed (github.com blocked?)", r.stderr)
         self.assertIn("glab install failed (gitlab.com blocked?)", r.stderr)
         self.assertNotIn("astral.sh", r.stderr)
 
