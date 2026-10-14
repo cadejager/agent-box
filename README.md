@@ -77,11 +77,11 @@ subdirectory. Standalone execution keeps project filesystem access scoped to tha
 sandbox's mounts.
 
 When the OpenCode **data directory is on NFS**, Agent Box allows only **one
-OpenCode launch at a time across all projects and front ends sharing its state**.
+OpenCode launch at a time across all projects and front ends sharing its database**.
 It uses this global lock:
 
 ```
-~/.local/state/agent-box/opencode/launch.lock
+~/.local/share/agent-box/<arch>/opencode.launch.lock
 ```
 
 Detection checks the data directory's backing filesystem on the launcher host
@@ -91,7 +91,7 @@ storage keeps the ordinary concurrent-launch behavior. This is a cooperative loc
 OpenCode launched outside the updated harness does not participate.
 
 The lock covers setup and the sandbox's lifetime. A blocked launch prints the
-owner's host, launcher PID, start time, project, and an exact `rm -- .../launch.lock`
+owner's host, launcher PID, start time, project, and an exact `rm -- .../opencode.launch.lock`
 recovery command. Normal exit or a handled termination removes the lock. A killed
 launcher or crashed host can leave it behind: remove it only after confirming the
 original run has stopped or its node is down. Locks are never broken automatically

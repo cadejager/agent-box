@@ -32,7 +32,8 @@ class Opencode(Agent):
         if fstype is not None and fstype not in ("nfs", "nfs4"):
             return super().run(sandbox, ctx)
 
-        lock = Path(core.AGENT_STATE) / "opencode" / "launch.lock"
+        # Beside the data dir, not inside it: the sandbox must not see or remove it.
+        lock = Path(core.AGENT_TOOLS) / "opencode.launch.lock"
         if fstype is None:
             print(f"Agent Box: cannot determine filesystem type for {data}; "
                   "using the OpenCode launch lock.", file=sys.stderr)

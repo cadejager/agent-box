@@ -255,14 +255,14 @@ class Tools(LauncherTest):
                     self.assertArg(argv, "--standalone")
                     self.assertFalse(any("OPENCODE_DB" in arg for arg in argv))
                     self.assertFalse((state / "projects").exists())
-                    self.assertFalse((state / "launch.lock").exists())
+                    self.assertFalse((self.tools / "opencode.launch.lock").exists())
                     self.assertEqual("OpenCode launch lock:" in err, fstype == "nfs")
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "uses GNU stat stub")
     def test_opencode_nfs_lock_blocks_another_project_before_setup(self):
         (self.stub / "stat").write_text("#!/bin/sh\nprintf 'nfs\\n'\n")
-        lock = self.home / ".local/state/agent-box/opencode/launch.lock"
-        lock.parent.mkdir(parents=True)
+        lock = self.tools / "opencode.launch.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
         lock.write_text('{"host":"frontend-1","pid":123,"started":"earlier","project":"/other"}')
         for engine in ("bwrap", "podman"):
             with self.subTest(engine=engine):

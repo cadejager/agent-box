@@ -81,7 +81,7 @@ class SharedStorage(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         self.data = self.home / "tools/opencode"
-        self.lock = self.home / "state/opencode/launch.lock"
+        self.lock = self.home / "tools/opencode.launch.lock"
         for bind in Opencode().binds:
             Path(bind.src).mkdir(parents=True)
 
@@ -101,6 +101,10 @@ class SharedStorage(unittest.TestCase):
             f"{self.home}/.local/state/opencode": f"{core.AGENT_STATE}/opencode",
             f"{self.home}/.cache/opencode": f"{core.AGENT_CACHE}/opencode",
         })
+
+    def test_lock_is_not_inside_a_sandbox_bind(self):
+        for bind in Opencode().binds:
+            self.assertFalse(self.lock.is_relative_to(bind.src), bind.src)
 
     def test_host_database_override_is_not_forwarded(self):
         with mock.patch.dict(os.environ, {"OPENCODE_DB": "/different.db"}):
