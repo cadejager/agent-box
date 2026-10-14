@@ -1,5 +1,6 @@
 import json
 import os
+import pty
 import select
 import shlex
 import signal
@@ -287,6 +288,61 @@ with launch_lock(Path(sys.argv[1]), '/project'):
                     launcher.kill()
                     launcher.wait(timeout=5)
 
+
+    def test_terminal_hangup_reaches_sandbox_and_releases_lock(self):
+        script = """
+import fcntl, sys, termios
+from pathlib import Path
+from agtbox.locking import launch_lock
+from agtbox.sandboxes.bwrap import Bwrap
+# This launcher is the session leader; acquire stdin as its controlling terminal.
+fcntl.ioctl(sys.stdin.fileno(), termios.TIOCSCTTY, 0)
+worker = '''
+import signal, sys
+from pathlib import Path
+def hangup(signum, frame):
+    # The lock must remain held until the worker has finished shutting down.
+    sys.exit(42 if Path(sys.argv[1]).exists() else 43)
+signal.signal(signal.SIGHUP, hangup)
+print('ready', flush=True)
+while True:
+    signal.pause()
+'''
+sandbox = Bwrap()
+sandbox.build_run_argv = lambda ctx: [sys.executable, '-c', worker, sys.argv[1]]
+with launch_lock(Path(sys.argv[1]), '/project'):
+    raise SystemExit(sandbox.wait(None))
+"""
+        master, slave = pty.openpty()
+        try:
+            with subprocess.Popen([sys.executable, "-c", script, str(self.lock)],
+                                  cwd=Path(__file__).resolve().parents[1], stdin=slave,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, start_new_session=True) as launcher:
+                os.close(slave)
+                slave = None
+                try:
+                    self.assertTrue(select.select([launcher.stdout], [], [], 5)[0])
+                    self.assertEqual(launcher.stdout.readline(), "ready\n")
+                    self.assertTrue(self.lock.exists())
+                    # Closing the terminal sends SIGHUP to the session leader,
+                    # unlike killpg(), which would signal the worker directly.
+                    os.close(master)
+                    master = None
+                    _, stderr = launcher.communicate(timeout=5)
+                    self.assertEqual(launcher.returncode, 42, stderr)
+                    self.assertFalse(self.lock.exists())
+                finally:
+                    # Also clean up the worker if a regression leaves it running.
+                    try:
+                        os.killpg(launcher.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    launcher.wait(timeout=5)
+        finally:
+            for fd in (master, slave):
+                if fd is not None:
+                    os.close(fd)
 
     def test_ctrl_c_reaches_sandbox_once(self):
         script = """

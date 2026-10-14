@@ -10,6 +10,11 @@
 
 **Spec:** PR #44 review discussion (this session); no separate spec file.
 
+**Follow-up correction:** The SIGHUP handling proposed in Task 1 below is superseded.
+Forward SIGHUP: terminal hangup can signal only the launcher as session leader.
+Keep the SIGINT no-op to avoid double-delivering Ctrl-C. A real PTY hangup test
+now checks child termination and lock cleanup.
+
 ## Global Constraints
 
 - Stdlib only. Run tests with `python3 -m unittest discover -s test`; all must pass after every task.

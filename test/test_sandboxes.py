@@ -93,6 +93,7 @@ class Wait(unittest.TestCase):
 
         def wait():
             handlers[signal.SIGTERM](signal.SIGTERM, None)
+            handlers[signal.SIGHUP](signal.SIGHUP, None)
             return -signal.SIGTERM
 
         child.wait.side_effect = wait
@@ -100,10 +101,11 @@ class Wait(unittest.TestCase):
              mock.patch("agtbox.sandboxes.base.signal.signal", side_effect=set_handler), \
              mock.patch.object(FakeSandbox, "build_run_argv", return_value=["fake"]):
             self.assertEqual(FakeSandbox().wait(None), 128 + signal.SIGTERM)
-        child.send_signal.assert_called_once_with(signal.SIGTERM)
+        self.assertEqual(child.send_signal.call_args_list,
+                         [mock.call(signal.SIGTERM), mock.call(signal.SIGHUP)])
         self.assertEqual(handlers, previous)
 
-    def test_terminal_signals_are_not_forwarded(self):
+    def test_ctrl_c_is_not_forwarded(self):
         child = mock.MagicMock()
         child.__enter__.return_value = child
         handlers = {}
@@ -116,9 +118,8 @@ class Wait(unittest.TestCase):
         installed = {}
 
         def wait():
-            for signum in (signal.SIGINT, signal.SIGHUP):
-                installed[signum] = handlers[signum]
-                handlers[signum](signum, None)
+            installed[signal.SIGINT] = handlers[signal.SIGINT]
+            handlers[signal.SIGINT](signal.SIGINT, None)
             return 0
 
         child.wait.side_effect = wait

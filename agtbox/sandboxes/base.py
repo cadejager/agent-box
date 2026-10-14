@@ -65,11 +65,13 @@ class Sandbox(ABC):
                 child.send_signal(signum)
 
         def ignore(signum, frame):
-            # The terminal already signals the child's process group. A Python
-            # handler (not SIG_IGN) resets on exec, so the sandbox still gets it.
+            # Terminal Ctrl-C already signals the child's process group. A
+            # Python handler (not SIG_IGN) resets on exec, preserving Ctrl-C.
             pass
 
-        handlers = {signal.SIGTERM: forward, signal.SIGINT: ignore, signal.SIGHUP: ignore}
+        # A terminal hangup can send SIGHUP only to this session leader, so it
+        # must be forwarded even though terminal SIGINT is not re-sent.
+        handlers = {signal.SIGTERM: forward, signal.SIGINT: ignore, signal.SIGHUP: forward}
         previous = {s: signal.signal(s, h) for s, h in handlers.items()}
         try:
             with subprocess.Popen(self.build_run_argv(ctx)) as child:
