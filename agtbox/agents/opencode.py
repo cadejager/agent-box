@@ -5,6 +5,12 @@ from agtbox import core
 from agtbox.agents.base import Agent
 from agtbox.locking import filesystem_type, launch_lock
 
+# Linux `stat -f -c %T` names, plus macOS `/sbin/mount` names.
+NETWORK_FSTYPES = frozenset({
+    "nfs", "nfs4", "lustre", "gpfs", "cifs", "smb2", "smb3", "smbfs", "ceph",
+    "afpfs", "webdav",
+})
+
 
 class Opencode(Agent):
     name = "opencode"
@@ -29,7 +35,7 @@ class Opencode(Agent):
         # credentials as well as history. Keep its existing location and contents.
         data = Path(core.AGENT_TOOLS) / "opencode"
         fstype = filesystem_type(data)
-        if fstype is not None and fstype not in ("nfs", "nfs4"):
+        if fstype is not None and fstype not in NETWORK_FSTYPES:
             return super().run(sandbox, ctx)
 
         # Beside the data dir, not inside it: the sandbox must not see or remove it.

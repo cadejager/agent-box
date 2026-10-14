@@ -76,7 +76,8 @@ working directory and primary writable project mount, even when launched from a
 subdirectory. Standalone execution keeps project filesystem access scoped to that
 sandbox's mounts.
 
-When the OpenCode **data directory is on NFS**, Agent Box allows only **one
+When the OpenCode **data directory is on a network filesystem** (NFS, Lustre,
+GPFS, CIFS/SMB, Ceph), Agent Box allows only **one
 OpenCode launch at a time across all projects and front ends sharing its database**.
 It uses this global lock:
 
@@ -86,7 +87,7 @@ It uses this global lock:
 
 Detection checks the data directory's backing filesystem on the launcher host
 (`stat -f` on Linux; the mount table on macOS), including symlink targets. If
-detection fails, the launcher prints a warning and uses the lock. Known non-NFS
+detection fails, the launcher prints a warning and uses the lock. Other
 storage keeps the ordinary concurrent-launch behavior. This is a cooperative lock:
 OpenCode launched outside the updated harness does not participate.
 
@@ -111,7 +112,7 @@ hangs or locking errors may still need further work.
 
 - **Package + shim.** The implementation lives in the `agtbox/` Python package (stdlib only). `bin/agtbox.py` is a thin shim — it adds the repo root to `sys.path` and calls `agtbox.cli.main()`. You can also run it as `python3 -m agtbox`.
 - **Agents and sandboxes are discovered at runtime.** `cli.main()` scans `agtbox/agents/` and `agtbox/sandboxes/` for subclasses of `Agent` and `Sandbox` — no hardcoded lists. The argparse `agent` choices and the `-s` sandbox choices are built from whatever is found. Fork the repo and drop a new file in either directory to add a plugin without touching any other code.
-- **One launcher, two sandboxes.** `cli.main()` builds a `bwrap …` (or `podman run …`) command as an argv array — no `eval`. Most launches exec it; when OpenCode needs the NFS lock, its launcher stays alive to forward signals and wait for sandbox exit before releasing the lock. Agent plugins supply their binds and environment, using the same tables for both sandboxes.
+- **One launcher, two sandboxes.** `cli.main()` builds a `bwrap …` (or `podman run …`) command as an argv array — no `eval`. Most launches exec it; when OpenCode needs the network-filesystem lock, its launcher stays alive to forward signals and wait for sandbox exit before releasing the lock. Agent plugins supply their binds and environment, using the same tables for both sandboxes.
 - **Locked-down sandbox (bwrap).** `/usr`, `/bin`, `/lib`, `/etc`, … are bound **read-only**; `$HOME` and `/tmp` are fresh tmpfs; networking is shared (the agents reach their APIs); and only these are writable, each bound at its real path: your **project**, `~/.config/agent-box`, `~/.local/share/agent-box`, `~/.local/state/agent-box`, `~/.cache/agent-box`. Nothing else on the host is even visible.
 - **Container sandbox (podman).** When bwrap isn't available, the same dirs are bind-mounted (`-v`, with `:ro` for `-r`) at the same paths into a throwaway container built from `container/Containerfile` (`debian:trixie` + git/ripgrep/openssh-client/build-essential/… — node/uv/the CLIs stay in the bind-mounted toolchain, so an image rebuild never touches them). It runs as the container's root, which rootless podman maps to your host user, so the files the agent writes stay owned by you; networking is shared. The image auto-builds on first use; `-b` rebuilds it.
 - **Persistent toolchain + global installs.** `~/.local/share/agent-box/<arch>` holds node, `uv`, the agent CLIs, the `gh`/`glab` git-hosting CLIs, and anything an agent installs globally (`npm -g`, `pip`, `uv tool` — outside a venv). It persists across runs and is shared between agents, so installs stick around and the CLIs can auto-update. It's **namespaced by CPU architecture** (`x86_64`, `aarch64`, …) so a single shared home can serve machines of different arches (see the shared-filesystem caveat below); your config, state, and caches stay un-namespaced and shared. Project dependencies still belong in the project (a `.venv`, `node_modules`, …).

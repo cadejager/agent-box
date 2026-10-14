@@ -35,7 +35,7 @@ Subclass `agtbox.agents.base.Agent` and set what you need. Everything except
 | `binds` | property `list[core.Bind]` | `[]` | The agent's own config/state directories to persist across runs (see below). |
 | `env_forward` | class attr `tuple[str]` | `()` | Env var **names** forwarded from the host **only when set** — API keys, base URLs, model overrides. An unset var is never passed (so it can't shadow mounted config). |
 | `env_literal` | class attr `tuple[str]` | `()` | `"KEY=VALUE"` strings **always** set for this agent (feature flags, etc.). |
-| `run(sandbox, ctx)` | method | setup, then exec | Launch the agent after sandbox/toolchain preparation. On NFS, OpenCode holds its shared launch lock across setup and `sandbox.wait(ctx)`, which forwards termination signals and returns the exit status. |
+| `run(sandbox, ctx)` | method | setup, then exec | Launch the agent after sandbox/toolchain preparation. On a network filesystem, OpenCode holds its shared launch lock across setup and `sandbox.wait(ctx)`, which forwards termination signals and returns the exit status. |
 
 Use **tuples** (not lists) for `packages`/`obsolete_packages`/`default_args`/`setup_args`/`env_forward`/`env_literal` so the
 shared class-level default can never be mutated in place and leak between agents.
@@ -90,5 +90,5 @@ its config persists under `~/.config/agent-box/gemini`, and `GEMINI_API_KEY` is
 forwarded when you have it exported.
 
 See `claude.py` (dir + JSON-file binds, several forwards), `opencode.py` (shared
-data/state/config/cache and a conditional NFS launch lock), `codex.py` (minimal), and `bash.py` (degenerate: a system
+data/state/config/cache and a conditional network-filesystem launch lock), `codex.py` (minimal), and `bash.py` (degenerate: a system
 binary, no packages/binds/env) for real examples.

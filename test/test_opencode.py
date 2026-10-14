@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from agtbox import core
-from agtbox.agents.opencode import Opencode
+from agtbox.agents.opencode import NETWORK_FSTYPES, Opencode
 from agtbox.context import RunContext
 from agtbox.locking import filesystem_type, launch_lock
 
@@ -113,14 +113,16 @@ class SharedStorage(unittest.TestCase):
 
     def test_local_storage_uses_exec_without_lock(self):
         ctx = self.context("/nfs/project")
-        sandbox = mock.Mock()
         # A lock left on storage that is now local is not needed for exclusion.
         self.lock.write_text("old lock")
-        with mock.patch("agtbox.agents.opencode.filesystem_type", return_value="ext2/ext3") as detect:
-            ctx.agent.run(sandbox, ctx)
-        detect.assert_called_once_with(self.data)
-        self.assertEqual(sandbox.method_calls, [mock.call.run_setup(ctx), mock.call.run(ctx)])
-        self.assertEqual(self.lock.read_text(), "old lock")
+        for fstype in ("ext2/ext3", "xfs", "apfs", "tmpfs"):
+            sandbox = mock.Mock()
+            with self.subTest(fstype=fstype), \
+                 mock.patch("agtbox.agents.opencode.filesystem_type", return_value=fstype) as detect:
+                ctx.agent.run(sandbox, ctx)
+                detect.assert_called_once_with(self.data)
+                self.assertEqual(sandbox.method_calls, [mock.call.run_setup(ctx), mock.call.run(ctx)])
+                self.assertEqual(self.lock.read_text(), "old lock")
 
     def test_nfs_holds_global_lock_through_setup_and_exit(self):
         ctx = self.context("/local/project")
@@ -132,7 +134,7 @@ class SharedStorage(unittest.TestCase):
                 self.fail("second project entered")
             return 7
 
-        for fstype in ("nfs", "nfs4", None):
+        for fstype in (*sorted(NETWORK_FSTYPES), None):
             sandbox = mock.Mock()
             sandbox.run_setup.side_effect = while_locked
             sandbox.wait.side_effect = while_locked
