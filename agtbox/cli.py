@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+
 from agtbox import core
 from agtbox.context import RunContext
 from agtbox.discovery import discover_agents, discover_sandboxes
@@ -61,8 +62,8 @@ def main(argv=None):
 
     app_dir, volumes, ro_volumes = core.normalize_paths(ns.app_dir, ns.volumes, ns.ro_volumes)
     binds = [*core.SHARED_BINDS, *agent.binds]
-    core.ensure_sources(binds)
     env = core.resolve_env(agent.env_forward, agent.env_literal)
+    core.ensure_sources(binds)
     ctx = RunContext(agent=agent, binds=binds, env=env, app_dir=app_dir,
                      volumes=volumes, ro_volumes=ro_volumes, extra_args=extra)
 
@@ -70,4 +71,4 @@ def main(argv=None):
         sandbox.rebuild()
     sandbox.prepare(ctx)
     ensure_tools(agent, sandbox, force=ns.update)
-    sandbox.run(ctx)
+    agent.run(sandbox, ctx)

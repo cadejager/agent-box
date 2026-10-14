@@ -118,6 +118,9 @@ if [ "${AGT_DO_CORE}" = "1" ]; then
 fi
 
 if [ -n "${AGT_NPM_PKGS}" ]; then
+  if [ -n "${AGT_NPM_REMOVE:-}" ]; then
+    "${AGT_TOOLS}/node/bin/npm" uninstall -g --prefix "${AGT_TOOLS}" --no-fund --no-audit ${AGT_NPM_REMOVE}
+  fi
   echo 'Agent Box: installing the agent CLI...' >&2
   "${AGT_TOOLS}/node/bin/npm" install -g --prefix "${AGT_TOOLS}" --no-fund --no-audit ${AGT_NPM_PKGS}
 fi
@@ -138,6 +141,7 @@ def agt_env(agent, do_core):
     return [
         ("AGT_TOOLS", core.AGENT_TOOLS),
         ("AGT_NPM_PKGS", " ".join(agent.packages)),
+        ("AGT_NPM_REMOVE", " ".join(agent.obsolete_packages)),
         ("AGT_DO_CORE", "1" if do_core else "0"),
     ]
 

@@ -57,6 +57,10 @@ class LauncherTest(unittest.TestCase):
             p = self.stub / engine
             p.write_text(STUB)
             p.chmod(0o755)
+        # Keep filesystem detection deterministic even if CI's tempdir is on NFS.
+        stat = self.stub / "stat"
+        stat.write_text("#!/bin/sh\nprintf 'ext2/ext3\\n'\n")
+        stat.chmod(0o755)
         # Pre-seed the toolchain so ensure_tools() skips the networked install. The
         # toolchain is namespaced by CPU arch (so one shared FS can serve nodes of
         # different arches); the launcher keys it on os.uname().machine -- seed there.
@@ -230,6 +234,47 @@ class PodmanArgv(LauncherTest):
 
 
 class Tools(LauncherTest):
+    @unittest.skipUnless(sys.platform.startswith("linux"), "uses GNU stat stub")
+    def test_opencode_shared_storage_in_both_sandboxes(self):
+        data = self.tools / "opencode"
+        state = self.home / ".local/state/agent-box/opencode"
+        for fstype in ("nfs", "ext2/ext3"):
+            (self.stub / "stat").write_text(f"#!/bin/sh\nprintf '{fstype}\\n'\n")
+            for engine in ("bwrap", "podman"):
+                with self.subTest(engine=engine, fstype=fstype):
+                    rc, argv, err = self.launch("-s", engine, "-a", str(self.app), "opencode")
+                    self.assertEqual(rc, 0, err)
+                    if engine == "bwrap":
+                        self.assertArg(argv, str(data))
+                        self.assertArg(argv, str(state))
+                        self.assertArg(argv, "--chdir")
+                    else:
+                        self.assertArg(argv, f"{data}:{self.home}/.local/share/opencode")
+                        self.assertArg(argv, f"{state}:{self.home}/.local/state/opencode")
+                        self.assertArg(argv, "-w")
+                    self.assertArg(argv, "--standalone")
+                    self.assertFalse(any("OPENCODE_DB" in arg for arg in argv))
+                    self.assertFalse((state / "projects").exists())
+                    self.assertFalse((self.tools.parent / f"opencode-{os.uname().machine}.launch.lock").exists())
+                    self.assertEqual("OpenCode launch lock:" in err, fstype == "nfs")
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "uses GNU stat stub")
+    def test_opencode_nfs_lock_blocks_another_project_before_setup(self):
+        (self.stub / "stat").write_text("#!/bin/sh\nprintf 'nfs\\n'\n")
+        lock = self.tools.parent / f"opencode-{os.uname().machine}.launch.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text('{"host":"frontend-1","pid":123,"started":"earlier","project":"/other"}')
+        for engine in ("bwrap", "podman"):
+            with self.subTest(engine=engine):
+                rc, argv, err = self.launch("-s", engine, "-a", str(self.app), "opencode")
+                self.assertEqual(rc, 1, err)
+                self.assertNoArg(argv, str(self.tools / "bin/opencode"))
+                self.assertIn("frontend-1", err)
+                self.assertIn("project /other", err)
+                self.assertIn(str(lock), err)
+                self.assertIn("rm --", err)
+                self.assertTrue(lock.exists())
+
     def test_codex_resume_subcommand(self):
         rc, argv, err = self.launch("-a", str(self.app), "-s", "bwrap",
                                     "codex", "--", "resume", "Z")
@@ -243,6 +288,27 @@ class Tools(LauncherTest):
         self.assertEqual(rc, 0, err)
         for word in ("--continue", "--resume", "--fork-session"):
             self.assertNoArg(argv, word)
+
+    def test_opencode_setup_runs_before_launch(self):
+        rc, argv, err = self.launch("-s", "bwrap", "-a", str(self.app), "opencode")
+        self.assertEqual(rc, 0, err)
+        oc = str(self.tools / "bin/opencode")
+        first = argv.index(oc)
+        self.assertEqual(argv[first:first + 5], [oc, "service", "set", "disabled", "true"])
+        self.assertEqual(argv.count(oc), 2)          # setup run, then the agent run
+        self.assertEqual(argv[-2:], [oc, "--standalone"])
+
+    def test_claude_has_no_setup_run(self):
+        rc, argv, err = self.launch("-s", "bwrap", "-a", str(self.app), "claude")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(argv.count(str(self.tools / "bin/claude")), 1)
+
+    def test_opencode_launched_standalone(self):
+        rc, argv, err = self.launch("-s", "bwrap", "-a", str(self.app),
+                                    "opencode", "--", "--continue")
+        self.assertEqual(rc, 0, err)
+        i = len(argv) - 1 - argv[::-1].index(str(self.tools / "bin/opencode"))
+        self.assertEqual(argv[i:], [str(self.tools / "bin/opencode"), "--standalone", "--continue"])
 
 
 class Bash(LauncherTest):
