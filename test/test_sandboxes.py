@@ -103,6 +103,34 @@ class Wait(unittest.TestCase):
         child.send_signal.assert_called_once_with(signal.SIGTERM)
         self.assertEqual(handlers, previous)
 
+    def test_terminal_signals_are_not_forwarded(self):
+        child = mock.MagicMock()
+        child.__enter__.return_value = child
+        handlers = {}
+
+        def set_handler(signum, handler):
+            old = handlers.get(signum, signal.SIG_DFL)
+            handlers[signum] = handler
+            return old
+
+        installed = {}
+
+        def wait():
+            for signum in (signal.SIGINT, signal.SIGHUP):
+                installed[signum] = handlers[signum]
+                handlers[signum](signum, None)
+            return 0
+
+        child.wait.side_effect = wait
+        with mock.patch("agtbox.sandboxes.base.subprocess.Popen", return_value=child), \
+             mock.patch("agtbox.sandboxes.base.signal.signal", side_effect=set_handler), \
+             mock.patch.object(FakeSandbox, "build_run_argv", return_value=["fake"]):
+            self.assertEqual(FakeSandbox().wait(None), 0)
+        child.send_signal.assert_not_called()
+        for handler in installed.values():
+            # SIG_IGN would be inherited across exec and make the agent ignore Ctrl-C.
+            self.assertTrue(callable(handler))
+
     def test_spawn_failure_restores_signal_handlers(self):
         signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
         before = [signal.getsignal(s) for s in signals]

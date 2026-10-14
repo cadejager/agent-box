@@ -54,11 +54,7 @@ class Sandbox(ABC):
         os.execvp(argv[0], argv)
 
     def wait(self, ctx):
-        """Run with inherited terminal I/O, keeping the launcher alive for cleanup.
-
-        Forward termination signals and retain ownership until the sandbox has
-        exited. SIGKILL/host failure deliberately leaves a recoverable stale lock.
-        """
+        """Run without exec so the caller can clean up; returns the exit status."""
         child = None
         pending = []
 
@@ -68,8 +64,13 @@ class Sandbox(ABC):
             else:
                 child.send_signal(signum)
 
-        signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
-        previous = {s: signal.signal(s, forward) for s in signals}
+        def ignore(signum, frame):
+            # The terminal already signals the child's process group. A Python
+            # handler (not SIG_IGN) resets on exec, so the sandbox still gets it.
+            pass
+
+        handlers = {signal.SIGTERM: forward, signal.SIGINT: ignore, signal.SIGHUP: ignore}
+        previous = {s: signal.signal(s, h) for s, h in handlers.items()}
         try:
             with subprocess.Popen(self.build_run_argv(ctx)) as child:
                 for signum in pending:

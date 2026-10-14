@@ -280,5 +280,45 @@ with launch_lock(Path(sys.argv[1]), '/project'):
                     launcher.wait(timeout=5)
 
 
+    def test_ctrl_c_reaches_sandbox_once(self):
+        script = """
+import sys
+from pathlib import Path
+from agtbox.locking import launch_lock
+from agtbox.sandboxes.bwrap import Bwrap
+worker = '''
+import signal, sys, time
+count = 0
+def handler(signum, frame):
+    global count
+    count += 1
+signal.signal(signal.SIGINT, handler)
+print('ready', flush=True)
+signal.pause()
+time.sleep(0.5)
+sys.exit(count)
+'''
+sandbox = Bwrap()
+sandbox.build_run_argv = lambda ctx: [sys.executable, '-c', worker]
+with launch_lock(Path(sys.argv[1]), '/project'):
+    raise SystemExit(sandbox.wait(None))
+"""
+        with subprocess.Popen([sys.executable, "-c", script, str(self.lock)],
+                              cwd=Path(__file__).resolve().parents[1],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, start_new_session=True) as launcher:
+            try:
+                self.assertTrue(select.select([launcher.stdout], [], [], 5)[0])
+                self.assertEqual(launcher.stdout.readline(), "ready\n")
+                os.killpg(launcher.pid, signal.SIGINT)  # what a terminal's Ctrl-C does
+                _, stderr = launcher.communicate(timeout=5)
+                self.assertEqual(launcher.returncode, 1, stderr)
+                self.assertFalse(self.lock.exists())
+            finally:
+                if launcher.poll() is None:
+                    launcher.kill()
+                    launcher.wait(timeout=5)
+
+
 if __name__ == "__main__":
     unittest.main()
