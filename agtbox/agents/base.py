@@ -1,4 +1,5 @@
 from abc import ABC
+
 from agtbox import core
 
 
@@ -21,3 +22,8 @@ class Agent(ABC):
     @property
     def binds(self):
         return []
+
+    def run(self, sandbox, ctx):
+        """Run setup and the agent. Plugins may wrap this lifetime in a lock."""
+        sandbox.run_setup(ctx)
+        sandbox.run(ctx)
