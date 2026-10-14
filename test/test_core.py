@@ -53,12 +53,17 @@ class BindType(unittest.TestCase):
 
 
 class Helpers(unittest.TestCase):
-    def test_arch_pair(self):
+    def test_arch_names(self):
         from agtbox import core
-        self.assertEqual(core.arch_pair("aarch64"), ("arm64", "arm64"))
-        self.assertEqual(core.arch_pair("x86_64"), ("x64", "amd64"))
+        self.assertEqual(core.arch_names("aarch64"),
+                         {"narch": "arm64", "goarch": "arm64", "uvarch": "aarch64"})
+        self.assertEqual(core.arch_names("x86_64"),
+                         {"narch": "x64", "goarch": "amd64", "uvarch": "x86_64"})
+
+    def test_arch_names_unsupported_exits(self):
+        from agtbox import core
         with self.assertRaises(SystemExit):
-            core.arch_pair("riscv64")
+            core.arch_names("riscv64")
 
     def test_kv(self):
         from agtbox import core

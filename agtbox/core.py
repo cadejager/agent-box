@@ -48,11 +48,14 @@ ENV_FORWARD_GENERIC = [
 ENV_LITERAL_GENERIC = []
 
 
-def arch_pair(machine):
+def arch_names(machine):
+    """The per-tool spellings of the CPU arch, keyed by the placeholder that uses
+    them. A dict rather than a tuple so a future tool with a fourth spelling adds a
+    key instead of renumbering every unpack site."""
     if machine == "aarch64":
-        return "arm64", "arm64"
+        return {"narch": "arm64", "goarch": "arm64", "uvarch": "aarch64"}
     if machine == "x86_64":
-        return "x64", "amd64"
+        return {"narch": "x64", "goarch": "amd64", "uvarch": "x86_64"}
     print(f"Error: unsupported architecture '{machine}'.", file=sys.stderr)
     sys.exit(1)
 

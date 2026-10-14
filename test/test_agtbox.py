@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Integration test suite for the agtbox package (Agent Box launcher).
 
 Integration tests run the launcher as a subprocess with `bwrap` and `podman`
@@ -88,7 +87,7 @@ class LauncherTest(unittest.TestCase):
             else:
                 env[k] = v
         return subprocess.run([sys.executable, "-m", "agtbox", *args],
-                              capture_output=True, text=True, env=env)
+                              capture_output=True, text=True, env=env, check=False)
 
     def launch(self, *args, **kw):
         """Run agtbox; return (returncode, argv_list, stderr). argv_list is the
@@ -335,19 +334,19 @@ class EngineSelect(LauncherTest):
 class ErrorCases(LauncherTest):
     # argparse owns flag/tool/engine validation: usage errors -> stderr, exit 2.
     def test_no_tool(self):
-        rc, _, err = self.launch("-s", "bwrap")
+        rc, _, _ = self.launch("-s", "bwrap")
         self.assertEqual(rc, 2)
 
     def test_unknown_tool(self):
-        rc, _, err = self.launch("frobnicate")
+        rc, _, _ = self.launch("frobnicate")
         self.assertEqual(rc, 2)
 
     def test_unknown_flag(self):
-        rc, _, err = self.launch("-Z", "claude")
+        rc, _, _ = self.launch("-Z", "claude")
         self.assertEqual(rc, 2)
 
     def test_bad_engine(self):
-        rc, _, err = self.launch("-s", "bogus", "claude")
+        rc, _, _ = self.launch("-s", "bogus", "claude")
         self.assertEqual(rc, 2)
 
     def test_missing_optarg(self):
@@ -488,7 +487,7 @@ class EnvForward(LauncherTest):
         os.path.islink("/etc/localtime") and "zoneinfo" in os.readlink("/etc/localtime"),
         "needs /etc/localtime -> .../zoneinfo/<zone>")
     def test_tz_derived_under_podman(self):
-        _, pd, err = self.launch("-s", "podman", "-a", str(self.app), "claude")
+        _, pd, _ = self.launch("-s", "podman", "-a", str(self.app), "claude")
         self.assertTrue([a for a in pd if a.startswith("TZ=")], "podman run should carry TZ")
 
 
@@ -526,7 +525,7 @@ class ShimEntryPoint(unittest.TestCase):
         # cwd is a tempdir, not the repo: a bare `python3 <script>` puts the script's
         # own dir (bin/) on sys.path, never cwd, so only the shim's insert can work.
         return subprocess.run([sys.executable, str(AGTBOX), *args],
-                              capture_output=True, text=True, env=env,
+                              capture_output=True, text=True, env=env, check=False,
                               cwd=tempfile.gettempdir())
 
     def test_help_via_shim(self):
