@@ -244,6 +244,13 @@ class Tools(LauncherTest):
         for word in ("--continue", "--resume", "--fork-session"):
             self.assertNoArg(argv, word)
 
+    def test_opencode_launched_standalone(self):
+        rc, argv, err = self.launch("-s", "bwrap", "-a", str(self.app),
+                                    "opencode", "--", "--continue")
+        self.assertEqual(rc, 0, err)
+        i = len(argv) - 1 - argv[::-1].index(str(self.tools / "bin/opencode"))
+        self.assertEqual(argv[i:], [str(self.tools / "bin/opencode"), "--standalone", "--continue"])
+
 
 class Bash(LauncherTest):
     """`bash` is a launchable "tool" that drops an audit shell INTO the sandbox: the

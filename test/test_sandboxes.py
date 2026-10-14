@@ -21,8 +21,8 @@ class FakeSandbox(Sandbox):
         return [f"E:{k}={v}" for k, v in pairs]
     def fmt_bind(self, src, dst, ro):
         return [f"B:{src}>{dst}{':ro' if ro else ''}"]
-    def build_run_argv(self, ctx):
-        return ["fake", *self.bind_args(ctx)]
+    def build_run_argv(self, ctx, cmd=None):
+        return ["fake", *self.bind_args(ctx), *(cmd or self.command(ctx))]
     def install_machine(self):
         return "x86_64"
     def install(self, script, pairs):
@@ -65,6 +65,13 @@ class BwrapArgv(unittest.TestCase):
         self.assertIn("--chdir", argv)
         self.assertEqual(argv[-1], "--resume")        # extra args last
         self.assertIn("--setenv", argv)
+
+    def test_command_is_bin_then_user_args(self):
+        from agtbox.sandboxes.bwrap import Bwrap
+        ctx = self._ctx()
+        argv = Bwrap().build_run_argv(ctx)
+        self.assertEqual(argv[-3:], ["--", ctx.agent.bin, "--resume"])   # claude: no defaults
+        self.assertEqual(Bwrap().build_run_argv(ctx, ["X"])[-2:], ["--", "X"])
 
     def test_bind_ordering_invariants(self):
         # bwrap mounts stack: a later bind shadows an earlier one. The whole
@@ -119,6 +126,23 @@ class PodmanArgv(unittest.TestCase):
         self.assertIn("agent-box", argv)
         self.assertEqual(argv[-2:], ["--session", "Y"])
         self.assertNotIn("--clearenv", argv)
+
+    def test_default_args_precede_user_args(self):
+        from unittest import mock
+        from agtbox.sandboxes.podman import Podman
+        ctx = self._ctx()
+        with mock.patch("agtbox.sandboxes.podman.sys.stdin.isatty", return_value=False), \
+             mock.patch("agtbox.sandboxes.podman.sys.stdout.isatty", return_value=False):
+            argv = Podman().build_run_argv(ctx)
+        self.assertEqual(argv[-4:], [ctx.agent.bin, "--standalone", "--session", "Y"])
+
+    def test_cmd_override_replaces_command(self):
+        from unittest import mock
+        from agtbox.sandboxes.podman import Podman
+        with mock.patch("agtbox.sandboxes.podman.sys.stdin.isatty", return_value=False), \
+             mock.patch("agtbox.sandboxes.podman.sys.stdout.isatty", return_value=False):
+            argv = Podman().build_run_argv(self._ctx(), ["X", "y"])
+        self.assertEqual(argv[-3:], ["agent-box", "X", "y"])
 
     def test_tty_allocated_only_when_attached(self):
         from unittest import mock

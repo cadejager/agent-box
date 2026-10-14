@@ -9,6 +9,7 @@ class Agent(ABC):
     name = ""
     packages = ()
     obsolete_packages = ()
+    default_args = ()
     env_forward = ()
     env_literal = ()
 
