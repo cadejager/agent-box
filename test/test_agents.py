@@ -1,9 +1,10 @@
 import unittest
+
 from agtbox import core
-from agtbox.agents.claude import Claude
-from agtbox.agents.opencode import Opencode
-from agtbox.agents.codex import Codex
 from agtbox.agents.bash import Bash
+from agtbox.agents.claude import Claude
+from agtbox.agents.codex import Codex
+from agtbox.agents.opencode import Opencode
 
 
 class AgentContract(unittest.TestCase):
