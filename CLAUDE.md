@@ -12,6 +12,7 @@ Agent Box: a Python 3 package (stdlib only) that runs AI coding agents (Claude C
 ./bin/agtbox.py [-a DIR] [-w VOL] [-r VOL] [-s bwrap|podman] [-b] [-u] claude|opencode|codex|bash [-- agent args...]
 ```
 
+
 - Flags (`-a`/`-w`/`-r`/`-s`/`-b`/`-u`, plus argparse's `-h`) come **before** the agent name; the agent's own args go **after a `--` separator** and are passed **verbatim** (no flag remapping) — session handling is each agent's own syntax (claude `--continue`/`--resume [ID]`/`--fork-session`; opencode `--continue`/`--session ID`/`--fork`; codex `resume [ID]`/`fork [ID]`). A bare `agtbox.py <agent>` needs no `--`. `-w` = read-write bind, `-r` = read-only bind, both at the same host path. `-s` forces a sandbox (default: auto — highest priority available); `-b` rebuilds the sandbox image (no-op for sandboxes without one); `-u` refreshes the toolchain and the agent's packages before running (replaces `AGTBOX_REINSTALL=1`, which is gone).
 - The toolchain auto-installs into `~/.local/share/agent-box` on first run. Test suite: `python3 -m unittest discover -s test`.
 

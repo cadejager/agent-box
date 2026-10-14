@@ -28,7 +28,7 @@ cd agent-box
 ./bin/agtbox.py codex         # OpenAI Codex
 ```
 
-The **first** launch installs the toolchain (node + `uv` + the three CLIs + `gh`/`glab`) into `~/.local/share/agent-box` — a one-time download, done inside the sandbox so the installers can't touch your host (under podman it also builds the image first). Later launches start instantly. Your current directory is bound into the sandbox **at the same absolute path**, so any path the agent prints is valid on your host. `bin/agtbox.py` can be run from anywhere.
+The **first** launch installs the toolchain (node + `uv` + the three CLIs + `gh`/`glab`) into `~/.local/share/agent-box` — a one-time download, done inside the sandbox so the installers can't touch your host (under podman it also builds the image first). `uv` is installed from its GitHub release tarball; later launches start instantly. Your current directory is bound into the sandbox **at the same absolute path**, so any path the agent prints is valid on your host. `bin/agtbox.py` can be run from anywhere.
 
 ## Usage
 
@@ -118,7 +118,7 @@ test/
   test_sandboxes.py       # sandbox plugins
   test_discovery.py       # plugin discovery
 .github/workflows/
-  lint.yml                # CI: ruff + the Python test suite
+  lint.yml                # CI: Python 3.11 + ruff + the Python test suite
 CLAUDE.md                 # terse architecture reference (for AI assistants)
 ```
 
