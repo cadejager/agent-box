@@ -64,6 +64,8 @@ Session handling is just each agent's native syntax, after `--`: claude `--conti
 
 opencode's Exa web search is **off by default** — turn it on by exporting `OPENCODE_ENABLE_EXA=1` (it's forwarded into the sandbox when set). claude and codex are launched with their own search defaults.
 
+opencode is **v2**, launched `--standalone` (a private server per run) with its shared background service disabled. Upgrading from v1: `./bin/agtbox.py -u opencode`. V1 plugins don't run under v2 — port them in your opencode config (`~/.config/agent-box/opencode`), which also gains a `service.json` to commit or gitignore.
+
 `./bin/agtbox.py -u claude` updates the toolchain and claude's npm package in place, then runs. Run with `-u` any time you want to pull the latest agent CLIs.
 
 ## How it works

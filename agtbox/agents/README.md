@@ -28,12 +28,15 @@ Subclass `agtbox.agents.base.Agent` and set what you need. Everything except
 |--------|------|---------|---------|
 | `name` | class attr `str` | `""` (**required**) | The CLI name, the argparse choice, the discovery key. Must match the file name. |
 | `packages` | class attr `tuple[str]` | `()` | **npm** package names, installed with `npm install -g` into the shared toolchain the first time this agent is launched. `()` if the agent ships no npm package (e.g. `bash`). |
+| `obsolete_packages` | class attr `tuple[str]` | `()` | npm packages `npm uninstall -g`'d right before `packages` are installed — for a renamed package that ships the same binary (opencode: `opencode-ai` → `@opencode/cli`). |
+| `default_args` | class attr `tuple[str]` | `()` | Args always passed to `bin`, **before** the user's args after `--` (opencode: `--standalone`). |
+| `setup_args` | class attr `tuple[str]` | `()` | If set, `bin *setup_args` runs in the normal agent sandbox (same binds/env) before every launch; a failure warns and the launch continues (opencode: `service set disabled true`). |
 | `bin` | property `str` | `f"{core.AGENT_TOOLS}/bin/{name}"` | Path to the executable **inside the sandbox**. The default points at where `npm -g` installs binaries. Override only for a system binary (`bash` → `/usr/bin/bash`). |
 | `binds` | property `list[core.Bind]` | `[]` | The agent's own config/state directories to persist across runs (see below). |
 | `env_forward` | class attr `tuple[str]` | `()` | Env var **names** forwarded from the host **only when set** — API keys, base URLs, model overrides. An unset var is never passed (so it can't shadow mounted config). |
 | `env_literal` | class attr `tuple[str]` | `()` | `"KEY=VALUE"` strings **always** set for this agent (feature flags, etc.). |
 
-Use **tuples** (not lists) for `packages`/`env_forward`/`env_literal` so the
+Use **tuples** (not lists) for `packages`/`obsolete_packages`/`default_args`/`setup_args`/`env_forward`/`env_literal` so the
 shared class-level default can never be mutated in place and leak between agents.
 
 ### `binds` — persisting the agent's config
