@@ -8,6 +8,7 @@ class Agent(ABC):
     can't be mutated in place and leak between agents."""
     name = ""
     packages = ()
+    obsolete_packages = ()
     env_forward = ()
     env_literal = ()
 

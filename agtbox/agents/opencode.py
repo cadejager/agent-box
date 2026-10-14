@@ -4,7 +4,8 @@ from agtbox.agents.base import Agent
 
 class Opencode(Agent):
     name = "opencode"
-    packages = ("opencode-ai",)
+    packages = ("@opencode/cli",)
+    obsolete_packages = ("opencode-ai",)
     env_forward = ("OPENCODE_ENABLE_EXA",)
     env_literal = ("OPENCODE_EXPERIMENTAL_LSP_TOOL=true",)
 

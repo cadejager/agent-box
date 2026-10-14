@@ -38,6 +38,15 @@ class AgentContract(unittest.TestCase):
         self.assertEqual(a.binds, [])                     # binds property returns a fresh list
         self.assertEqual(a.env_forward + a.env_literal, ())
 
+    def test_opencode_v2_package(self):
+        a = Opencode()
+        self.assertEqual(a.packages, ("@opencode/cli",))
+        self.assertEqual(a.obsolete_packages, ("opencode-ai",))
+
+    def test_obsolete_packages_default_empty(self):
+        for cls in (Claude, Codex, Bash):
+            self.assertEqual(cls().obsolete_packages, ())
+
 
 if __name__ == "__main__":
     unittest.main()
