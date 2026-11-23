@@ -1,5 +1,8 @@
 import os
 import shutil
+import signal
+import subprocess
+import sys
 from abc import ABC, abstractmethod
 
 
@@ -16,11 +19,14 @@ class Sandbox(ABC):
     @abstractmethod
     def fmt_bind(self, src, dst, ro): ...
     @abstractmethod
-    def build_run_argv(self, ctx): ...
+    def build_run_argv(self, ctx, cmd=None): ...
     @abstractmethod
     def install_machine(self): ...
     @abstractmethod
     def install(self, script, pairs): ...
+
+    def command(self, ctx):
+        return [ctx.agent.bin, *ctx.agent.default_args, *ctx.extra_args]
 
     def prepare(self, ctx):
         pass
@@ -46,3 +52,41 @@ class Sandbox(ABC):
     def run(self, ctx):
         argv = self.build_run_argv(ctx)
         os.execvp(argv[0], argv)
+
+    def wait(self, ctx):
+        """Run without exec so the caller can clean up; returns the exit status."""
+        child = None
+        pending = []
+
+        def forward(signum, frame):
+            if child is None:
+                pending.append(signum)
+            else:
+                child.send_signal(signum)
+
+        def ignore(signum, frame):
+            # Terminal Ctrl-C already signals the child's process group. A
+            # Python handler (not SIG_IGN) resets on exec, preserving Ctrl-C.
+            pass
+
+        # A terminal hangup can send SIGHUP only to this session leader, so it
+        # must be forwarded even though terminal SIGINT is not re-sent.
+        handlers = {signal.SIGTERM: forward, signal.SIGINT: ignore, signal.SIGHUP: forward}
+        previous = {s: signal.signal(s, h) for s, h in handlers.items()}
+        try:
+            with subprocess.Popen(self.build_run_argv(ctx)) as child:
+                for signum in pending:
+                    child.send_signal(signum)
+                code = child.wait()
+            return code if code >= 0 else 128 - code
+        finally:
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
+
+    def run_setup(self, ctx):
+        if not ctx.agent.setup_args:
+            return
+        argv = self.build_run_argv(ctx, [ctx.agent.bin, *ctx.agent.setup_args])
+        if subprocess.run(argv, check=False).returncode != 0:
+            print(f"Agent Box: warning: `{ctx.agent.name} {' '.join(ctx.agent.setup_args)}` "
+                  "failed; launching anyway.", file=sys.stderr)

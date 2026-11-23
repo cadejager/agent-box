@@ -10,3 +10,6 @@ container/certs/*
 
 # Python bytecode cache
 __pycache__/
+
+# Superpowers workflow scratch (progress ledgers etc.; never commit)
+.superpowers/

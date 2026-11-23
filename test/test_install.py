@@ -33,6 +33,12 @@ class InstallScript(unittest.TestCase):
         # npm install references AGT_NPM_PKGS unconditionally (outside the core gate)
         self.assertIn("${AGT_NPM_PKGS}", s)
 
+    def test_obsolete_packages_uninstalled_before_install(self):
+        s = install.install_script("x86_64")
+        self.assertIn('uninstall -g --prefix "${AGT_TOOLS}"', s)
+        self.assertIn("${AGT_NPM_REMOVE:-}", s)     # :- so set -u tolerates it unset
+        self.assertLess(s.index("uninstall -g"), s.index("install -g --prefix"))
+
 
 class AgtEnv(unittest.TestCase):
     def test_carries_packages_and_do_core(self):
@@ -40,6 +46,13 @@ class AgtEnv(unittest.TestCase):
         pairs = dict(install.agt_env(Claude(), do_core=True))
         self.assertEqual(pairs["AGT_NPM_PKGS"], "@anthropic-ai/claude-code")
         self.assertEqual(pairs["AGT_DO_CORE"], "1")
+
+    def test_carries_obsolete_packages(self):
+        from agtbox.agents.claude import Claude
+        from agtbox.agents.opencode import Opencode
+        self.assertEqual(dict(install.agt_env(Opencode(), do_core=False))["AGT_NPM_REMOVE"],
+                         "opencode-ai")
+        self.assertEqual(dict(install.agt_env(Claude(), do_core=False))["AGT_NPM_REMOVE"], "")
 
     def test_arch_vars_no_longer_cross_the_boundary(self):
         # Arch is substituted in Python and baked into the script literals.

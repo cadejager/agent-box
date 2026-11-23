@@ -89,11 +89,11 @@ class Bwrap(Sandbox):
         bw += self.fmt_env(env_pairs)
         return bw
 
-    def build_run_argv(self, ctx):
+    def build_run_argv(self, ctx, cmd=None):
         bw = self.base_args(ctx.env)
         bw += ["--bind", ctx.app_dir, ctx.app_dir, "--chdir", ctx.app_dir]
         bw += self.bind_args(ctx)
-        return ["bwrap", *bw, "--", ctx.agent.bin, *ctx.extra_args]
+        return ["bwrap", *bw, "--", *(cmd or self.command(ctx))]
 
     def install_machine(self):
         return os.uname().machine        # bwrap is Linux-only: host arch == run arch

@@ -79,7 +79,7 @@ class Podman(Sandbox):
         except OSError:
             pass
 
-    def build_run_argv(self, ctx):
+    def build_run_argv(self, ctx, cmd=None):
         # -t (allocate a TTY) only when actually attached to one, so an interactive
         # TUI works in a real terminal AND `agtbox bash -- -c ...` works in a pipe/CI
         # (podman -it in a non-TTY dies "the input device is not a TTY"). -i always.
@@ -89,7 +89,7 @@ class Podman(Sandbox):
         pd += self._toolchain_mounts()
         pd += ["-v", f"{ctx.app_dir}:{ctx.app_dir}", "-w", ctx.app_dir]
         pd += self.bind_args(ctx)
-        return ["podman", *pd, "--", core.IMAGE, ctx.agent.bin, *ctx.extra_args]
+        return ["podman", *pd, "--", core.IMAGE, *(cmd or self.command(ctx))]
 
     def _toolchain_mounts(self):
         # The rw toolchain + cache binds, shared by run and install so they can't drift.

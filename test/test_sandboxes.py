@@ -1,11 +1,13 @@
 import os
 import shutil
+import signal
 import tempfile
 import types
 import unittest
 from pathlib import Path
 from unittest import mock
 from unittest.mock import mock_open
+
 import agtbox.core
 from agtbox.context import RunContext
 from agtbox.sandboxes.base import Sandbox
@@ -21,8 +23,8 @@ class FakeSandbox(Sandbox):
         return [f"E:{k}={v}" for k, v in pairs]
     def fmt_bind(self, src, dst, ro):
         return [f"B:{src}>{dst}{':ro' if ro else ''}"]
-    def build_run_argv(self, ctx):
-        return ["fake", *self.bind_args(ctx)]
+    def build_run_argv(self, ctx, cmd=None):
+        return ["fake", *self.bind_args(ctx), *(cmd or self.command(ctx))]
     def install_machine(self):
         return "x86_64"
     def install(self, script, pairs):
@@ -43,11 +45,108 @@ class BindArgs(unittest.TestCase):
         self.assertIn("B:/ro>/ro:ro", out)
 
 
+class RunSetup(unittest.TestCase):
+    def _ctx(self, agent):
+        from agtbox.core import Bind
+        return RunContext(agent=agent, binds=[Bind("/cfg/oc", "/h/.config/opencode")],
+                          env=[], app_dir="/app", extra_args=["--continue"])
+
+    def test_runs_setup_command_with_config_binds(self):
+        from agtbox.agents.opencode import Opencode
+        ctx = self._ctx(Opencode())
+        with mock.patch("agtbox.sandboxes.base.subprocess.run",
+                        return_value=types.SimpleNamespace(returncode=0)) as run:
+            FakeSandbox().run_setup(ctx)
+        argv = run.call_args.args[0]
+        self.assertIn("B:/cfg/oc>/h/.config/opencode", argv)
+        self.assertEqual(argv[-5:], [ctx.agent.bin, "service", "set", "disabled", "true"])
+        self.assertNotIn("--standalone", argv)
+        self.assertNotIn("--continue", argv)
+
+    def test_noop_without_setup_args(self):
+        from agtbox.agents.claude import Claude
+        with mock.patch("agtbox.sandboxes.base.subprocess.run") as run:
+            FakeSandbox().run_setup(self._ctx(Claude()))
+        run.assert_not_called()
+
+    def test_failure_warns_and_continues(self):
+        from agtbox.agents.opencode import Opencode
+        with mock.patch("agtbox.sandboxes.base.subprocess.run",
+                        return_value=types.SimpleNamespace(returncode=1)), \
+             mock.patch("sys.stderr") as err:
+            FakeSandbox().run_setup(self._ctx(Opencode()))
+        self.assertIn("warning", "".join(c.args[0] for c in err.write.call_args_list))
+
+
+class Wait(unittest.TestCase):
+    def test_forwards_signals_and_restores_handlers_after_child_exits(self):
+        child = mock.MagicMock()
+        child.__enter__.return_value = child
+        previous = {s: signal.getsignal(s)
+                    for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+        handlers = {}
+
+        def set_handler(signum, handler):
+            old = handlers.get(signum, previous[signum])
+            handlers[signum] = handler
+            return old
+
+        def wait():
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+            handlers[signal.SIGHUP](signal.SIGHUP, None)
+            return -signal.SIGTERM
+
+        child.wait.side_effect = wait
+        with mock.patch("agtbox.sandboxes.base.subprocess.Popen", return_value=child), \
+             mock.patch("agtbox.sandboxes.base.signal.signal", side_effect=set_handler), \
+             mock.patch.object(FakeSandbox, "build_run_argv", return_value=["fake"]):
+            self.assertEqual(FakeSandbox().wait(None), 128 + signal.SIGTERM)
+        self.assertEqual(child.send_signal.call_args_list,
+                         [mock.call(signal.SIGTERM), mock.call(signal.SIGHUP)])
+        self.assertEqual(handlers, previous)
+
+    def test_ctrl_c_is_not_forwarded(self):
+        child = mock.MagicMock()
+        child.__enter__.return_value = child
+        handlers = {}
+
+        def set_handler(signum, handler):
+            old = handlers.get(signum, signal.SIG_DFL)
+            handlers[signum] = handler
+            return old
+
+        installed = {}
+
+        def wait():
+            installed[signal.SIGINT] = handlers[signal.SIGINT]
+            handlers[signal.SIGINT](signal.SIGINT, None)
+            return 0
+
+        child.wait.side_effect = wait
+        with mock.patch("agtbox.sandboxes.base.subprocess.Popen", return_value=child), \
+             mock.patch("agtbox.sandboxes.base.signal.signal", side_effect=set_handler), \
+             mock.patch.object(FakeSandbox, "build_run_argv", return_value=["fake"]):
+            self.assertEqual(FakeSandbox().wait(None), 0)
+        child.send_signal.assert_not_called()
+        for handler in installed.values():
+            # SIG_IGN would be inherited across exec and make the agent ignore Ctrl-C.
+            self.assertTrue(callable(handler))
+
+    def test_spawn_failure_restores_signal_handlers(self):
+        signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+        before = [signal.getsignal(s) for s in signals]
+        with mock.patch("agtbox.sandboxes.base.subprocess.Popen", side_effect=OSError("spawn")), \
+             mock.patch.object(FakeSandbox, "build_run_argv", return_value=["fake"]), \
+             self.assertRaisesRegex(OSError, "spawn"):
+            FakeSandbox().wait(None)
+        self.assertEqual([signal.getsignal(s) for s in signals], before)
+
+
 class BwrapArgv(unittest.TestCase):
     def _ctx(self):
+        from agtbox.agents.claude import Claude
         from agtbox.context import RunContext
         from agtbox.core import Bind
-        from agtbox.agents.claude import Claude
         return RunContext(agent=Claude(),
                           binds=[Bind("/cfg/claude", "/h/.claude")],
                           env=[("HOME", "/h"), ("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1")],
@@ -65,6 +164,13 @@ class BwrapArgv(unittest.TestCase):
         self.assertIn("--chdir", argv)
         self.assertEqual(argv[-1], "--resume")        # extra args last
         self.assertIn("--setenv", argv)
+
+    def test_command_is_bin_then_user_args(self):
+        from agtbox.sandboxes.bwrap import Bwrap
+        ctx = self._ctx()
+        argv = Bwrap().build_run_argv(ctx)
+        self.assertEqual(argv[-3:], ["--", ctx.agent.bin, "--resume"])   # claude: no defaults
+        self.assertEqual(Bwrap().build_run_argv(ctx, ["X"])[-2:], ["--", "X"])
 
     def test_bind_ordering_invariants(self):
         # bwrap mounts stack: a later bind shadows an earlier one. The whole
@@ -84,6 +190,7 @@ class BwrapArgv(unittest.TestCase):
 
     def test_install_runs_bwrap_with_given_pairs(self):
         from unittest import mock
+
         from agtbox.sandboxes.bwrap import Bwrap
         captured = {}
         with mock.patch("agtbox.sandboxes.bwrap.subprocess.run",
@@ -97,15 +204,16 @@ class BwrapArgv(unittest.TestCase):
 
 class PodmanArgv(unittest.TestCase):
     def _ctx(self):
+        from agtbox.agents.opencode import Opencode
         from agtbox.context import RunContext
         from agtbox.core import Bind
-        from agtbox.agents.opencode import Opencode
         return RunContext(agent=Opencode(), binds=[Bind("/cfg/oc", "/h/.config/opencode")],
                           env=[("HOME", "/h")], app_dir="/app", volumes=[],
                           ro_volumes=["/ro"], extra_args=["--session", "Y"])
 
     def test_run_argv(self):
         from unittest import mock
+
         from agtbox.sandboxes.podman import Podman
         with mock.patch("agtbox.sandboxes.podman.sys.stdin.isatty", return_value=False), \
              mock.patch("agtbox.sandboxes.podman.sys.stdout.isatty", return_value=False):
@@ -120,8 +228,28 @@ class PodmanArgv(unittest.TestCase):
         self.assertEqual(argv[-2:], ["--session", "Y"])
         self.assertNotIn("--clearenv", argv)
 
+    def test_default_args_precede_user_args(self):
+        from unittest import mock
+
+        from agtbox.sandboxes.podman import Podman
+        ctx = self._ctx()
+        with mock.patch("agtbox.sandboxes.podman.sys.stdin.isatty", return_value=False), \
+             mock.patch("agtbox.sandboxes.podman.sys.stdout.isatty", return_value=False):
+            argv = Podman().build_run_argv(ctx)
+        self.assertEqual(argv[-4:], [ctx.agent.bin, "--standalone", "--session", "Y"])
+
+    def test_cmd_override_replaces_command(self):
+        from unittest import mock
+
+        from agtbox.sandboxes.podman import Podman
+        with mock.patch("agtbox.sandboxes.podman.sys.stdin.isatty", return_value=False), \
+             mock.patch("agtbox.sandboxes.podman.sys.stdout.isatty", return_value=False):
+            argv = Podman().build_run_argv(self._ctx(), ["X", "y"])
+        self.assertEqual(argv[-3:], ["agent-box", "X", "y"])
+
     def test_tty_allocated_only_when_attached(self):
         from unittest import mock
+
         from agtbox.sandboxes.podman import Podman
         # attached to a terminal -> allocate a TTY (interactive TUIs)
         with mock.patch("agtbox.sandboxes.podman.sys.stdin.isatty", return_value=True), \
@@ -138,6 +266,7 @@ class PodmanArgv(unittest.TestCase):
 
     def test_derive_tz_appends_to_ctx_env(self):
         from unittest import mock
+
         from agtbox.sandboxes.podman import Podman
         ctx = self._ctx()
         with mock.patch("agtbox.sandboxes.podman.os.readlink",

@@ -1,9 +1,10 @@
 import unittest
+
 from agtbox import core
-from agtbox.agents.claude import Claude
-from agtbox.agents.opencode import Opencode
-from agtbox.agents.codex import Codex
 from agtbox.agents.bash import Bash
+from agtbox.agents.claude import Claude
+from agtbox.agents.codex import Codex
+from agtbox.agents.opencode import Opencode
 
 
 class AgentContract(unittest.TestCase):
@@ -37,6 +38,25 @@ class AgentContract(unittest.TestCase):
         self.assertEqual(a.packages, ())                  # immutable default
         self.assertEqual(a.binds, [])                     # binds property returns a fresh list
         self.assertEqual(a.env_forward + a.env_literal, ())
+
+    def test_opencode_v2_package(self):
+        a = Opencode()
+        self.assertEqual(a.packages, ("@opencode/cli",))
+        self.assertEqual(a.obsolete_packages, ("opencode-ai",))
+
+    def test_obsolete_packages_default_empty(self):
+        for cls in (Claude, Codex, Bash):
+            self.assertEqual(cls().obsolete_packages, ())
+
+    def test_opencode_disables_service(self):
+        self.assertEqual(Opencode().setup_args, ("service", "set", "disabled", "true"))
+        for cls in (Claude, Codex, Bash):
+            self.assertEqual(cls().setup_args, ())
+
+    def test_opencode_standalone_by_default(self):
+        self.assertEqual(Opencode().default_args, ("--standalone",))
+        for cls in (Claude, Codex, Bash):
+            self.assertEqual(cls().default_args, ())
 
 
 if __name__ == "__main__":
