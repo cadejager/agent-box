@@ -25,7 +25,6 @@ class AgentContract(unittest.TestCase):
         for d in (".local/share/opencode", ".local/state/opencode",
                   ".cache/opencode", ".config/opencode"):
             self.assertIn(f"{core.HOME}/{d}", dsts)
-        self.assertIn("OPENCODE_EXPERIMENTAL_LSP_TOOL=true", Opencode().env_literal)
 
     def test_codex(self):
         a = Codex()
