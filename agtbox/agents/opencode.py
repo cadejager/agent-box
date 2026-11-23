@@ -18,8 +18,6 @@ class Opencode(Agent):
     obsolete_packages = ("opencode-ai",)
     default_args = ("--standalone",)
     setup_args = ("service", "set", "disabled", "true")
-    env_forward = ("OPENCODE_ENABLE_EXA",)
-    env_literal = ("OPENCODE_EXPERIMENTAL_LSP_TOOL=true",)
 
     @property
     def binds(self):
@@ -33,14 +31,14 @@ class Opencode(Agent):
     def run(self, sandbox, ctx):
         # Inspect the data mount, not the project: the shared database contains
         # credentials as well as history. Keep its existing location and contents.
-        data = Path(core.AGENT_TOOLS) / "opencode"
+        data = Path(core.AGENT_TOOLS) / self.name
         fstype = filesystem_type(data)
         if fstype is not None and fstype not in NETWORK_FSTYPES:
             return super().run(sandbox, ctx)
 
         # Same filesystem as the data dir, but outside AGENT_TOOLS, which the
         # sandbox mounts read-write: the agent must not see or remove the lock.
-        lock = Path(core.AGENT_TOOLS).parent / f"opencode-{core.ARCH}.launch.lock"
+        lock = Path(core.AGENT_TOOLS).parent / f"{self.name}-{core.ARCH}.launch.lock"
         if fstype is None:
             print(f"Agent Box: cannot determine filesystem type for {data}; "
                   "using the OpenCode launch lock.", file=sys.stderr)

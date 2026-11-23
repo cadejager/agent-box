@@ -10,7 +10,7 @@ from agtbox.agents.base import Agent
 class Discovery(unittest.TestCase):
     def test_finds_all_agents_sorted(self):
         agents = discovery.discover_agents()
-        self.assertEqual(list(agents), ["bash", "claude", "codex", "opencode"])
+        self.assertEqual(list(agents), ["bash", "claude", "codex", "omos", "opencode"])
 
     def test_finds_all_sandboxes_sorted(self):
         self.assertEqual(list(discovery.discover_sandboxes()), ["bwrap", "podman"])

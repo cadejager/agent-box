@@ -62,8 +62,6 @@ Flags come **before** the agent name. To pass arguments to the agent, put them *
 
 Session handling is just each agent's native syntax, after `--`: claude `--continue` / `--resume [ID]` / `--fork-session`; opencode `--continue` / `--session ID` / `--fork`; codex `resume [ID]` / `fork [ID]`.
 
-opencode's Exa web search is **off by default** — turn it on by exporting `OPENCODE_ENABLE_EXA=1` (it's forwarded into the sandbox when set). claude and codex are launched with their own search defaults.
-
 opencode is **v2**, launched `--standalone` (a private server per run) with its shared background service disabled. Upgrading from v1: `./bin/agtbox.py -u opencode`. V1 plugins don't run under v2 — port them in your opencode config (`~/.config/agent-box/opencode`), which also gains a `service.json` to commit or gitignore.
 
 OpenCode keeps its existing **shared database, logins, config, state, cache, and
