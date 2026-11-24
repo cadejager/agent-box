@@ -151,7 +151,7 @@ class SharedStorage(unittest.TestCase):
             f"{self.home}/.config/opencode": f"{core.AGENT_CONFIG}/opencode",
             f"{self.home}/.local/share/opencode": f"{core.AGENT_TOOLS}/opencode",
             f"{self.home}/.local/state/opencode": f"{core.AGENT_STATE}/opencode",
-            f"{self.home}/.cache/opencode": f"{core.AGENT_CACHE}/opencode",
+            f"{self.home}/.cache/opencode": f"{core.AGENT_CACHE}/{core.ARCH}/opencode",
         })
 
     def test_master_is_outside_every_sandbox_bind(self):

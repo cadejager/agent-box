@@ -16,7 +16,7 @@ class OMOS(Opencode):
             core.Bind(f"{core.AGENT_CONFIG}/omos", f"{core.HOME}/.config/opencode"),
             core.Bind(f"{core.AGENT_TOOLS}/omos", f"{core.HOME}/.local/share/opencode"),
             core.Bind(f"{core.AGENT_STATE}/omos", f"{core.HOME}/.local/state/opencode"),
-            core.Bind(f"{core.AGENT_CACHE}/omos", f"{core.HOME}/.cache/opencode"),
+            core.Bind(f"{core.AGENT_CACHE}/{core.ARCH}/omos", f"{core.HOME}/.cache/opencode"),
             core.skill_bind(f"{core.HOME}/.agents/skills"),
         ]
 

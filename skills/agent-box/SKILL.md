@@ -1,54 +1,50 @@
 ---
 name: agent-box
-description: Use when running inside an Agent Box sandbox (env AGENT=1, empty tmpfs $HOME, read-only system) and you need a tool, language runtime, CLI or library that isn't installed — or need to know what is available (node/npm/npx, uv/uvx, managed Python versions, gh, glab), where installs persist, or how to work with git/GitHub/GitLab here.
+description: Read this before saying a tool, CLI, library or language version is missing, and whenever you hit "command not found", "No module named", pip "externally-managed" or read-only errors, or need a newer Python/Node, a linter/formatter/build tool (cmake, ruff, prettier, tsc, shellcheck…), or GitHub/GitLab access. You are in an Agent Box sandbox (PATH starts with ~/.local/share/agent-box): no root, but uv/uvx/npm/npx can install almost anything without asking the user.
 ---
 
-# Agent Box sandbox: what you have
+# Agent Box sandbox
 
-You are in an unprivileged sandbox. The system (`/usr`, `/etc`, …) is **read-only** and `$HOME` is an **empty tmpfs** that disappears when the session ends. You can still install almost anything you need **without root** using the per-user toolchain below. Do not tell the user a tool is "unavailable" or ask them to install it until you have tried these.
+You are in an unprivileged sandbox. The system (`/usr`, `/etc`, …) is **read-only** and `$HOME` and `/tmp` are **private tmpfs** that vanish when the session ends. There is no root, `sudo` or `apt`. You can still get nearly any tool with the per-user toolchain below, so don't tell the user something is unavailable until you've tried it.
 
-## Toolchain (already on PATH)
+## Before saying a tool is missing, try in this order
+1. `command -v X`
+2. Run it once, no install: `uvx X` / `uvx --from PKG X`, or `npx -y X` / `npx -y -p PKG X`
+3. Install it only if you'll reuse it: `uv tool install PKG` / `npm i -g PKG`
+4. Only then report failure — with the exact error and the host that failed.
 
-| Tool | Use |
-|------|-----|
-| `node`, `npm`, `npx` | JavaScript runtime and packages |
-| `uv`, `uvx` | Python packages, venvs, and **Python versions** |
-| `gh` | GitHub CLI |
-| `glab` | GitLab CLI |
-| `git`, `python3`, `curl`, `tar`, compilers | From the host. Host `python3` may be **old** (e.g. 3.6) — use uv for a modern one |
+Examples that work: `uvx ruff check .`, `uvx cmake --version`, `uvx --from shellcheck-py shellcheck f.sh`, `npx -y prettier@3 --check .`, `npx -y -p typescript tsc --noEmit`, `npx -y node@20 script.js` (a different Node version).
 
-Network access is available (HTTP(S) via the host's proxy settings if any).
+## What's on PATH
+| Tool | Notes |
+|------|-------|
+| `node`, `npm`, `npx` | Current LTS Node. Need another version? `npx -y node@20 …` |
+| `uv`, `uvx` | Python packages, venvs and **Python versions** |
+| `gh`, `glab` | GitHub / GitLab CLIs |
+| `git`, `python3`, `curl`, compilers, `jq`, … | Come from the host (bwrap) or a Debian image (podman), so they **vary** — `command -v X` first. Host `python3` can be old (3.6 on some hosts) and may lack pip/venv; use uv. If `rg` is missing, use `git grep` / `grep -rn` |
 
-## Getting more software
+Network is available. Proxy settings are forwarded only if the user's host had them set.
 
-**One-off CLI tools — no install step**
-- Python: `uvx ruff check .`, `uvx --from httpie http GET example.com`, `uvx black --version`
-- Node: `npx --yes prettier --check .`, `npx --yes cowsay@1 hi`
+## Python: prefer uv
+- Project: `uv sync` (uv project), or `uv venv && uv pip install -r requirements.txt`
+- One script: `uv run --with requests script.py`, or store deps in the script: `uv add --script script.py requests && uv run script.py`
+- Other Python versions: `uv python install 3.12`, then `uv run --python 3.12 …`, `uv venv --python 3.12`, or just `python3.12` (it lands on PATH). `uv python list` shows what's available.
+- `python -m venv` + `pip` works where the host's Python has pip/venv, but it may not (esp. podman) — uv always works. A bare `pip install` is a persistent user install and only affects the Python that pip belongs to (`pip --version`).
+- Node projects: plain `npm install` (`node_modules` stays in the project).
 
-**Persistent global tools** (survive across sessions, shared by all projects)
-- `npm install -g <pkg>` → binary lands on PATH
-- `uv tool install <pkg>` → binary lands on PATH (e.g. `uv tool install httpie`)
-- `pip install <pkg>` also goes to the persistent prefix (no `--user`/`--break-system-packages` needed)
-
-**Project dependencies**
-- Python: `uv venv && uv pip install -r requirements.txt`, or `uv sync` / `uv run script.py` in a uv project, or a single script with inline deps: `uv run --with requests script.py`
-- Node: `npm install` in the project as usual (`node_modules` lives in the project dir)
-
-**Other Python versions**
-- `uv python install 3.12` then `uv run --python 3.12 …`, `uv venv --python 3.12`, or `uvx --python 3.12 …`. uv downloads a standalone build; no root or system packages needed.
-- `uv python list` shows what's available/installed.
-
-**Persistence notes**
-- Persisted: global npm/uv/pip installs and download caches. Not persisted: anything else under `$HOME`, `/tmp`, and system paths. Do not try `apt`/`sudo`; they won't work.
-- Files in the project directory (and any extra directories the user mounted) persist normally.
-- If a venv in the project stops working in a new session, recreate it (`uv venv --clear && uv sync`).
+## What persists
+- **Persists:** the project directory (and any extra dirs the user mounted), plus global installs — `npm i -g`, `uv tool install`, `uv python install` — and download caches.
+- **Does not persist:** everything else — `$HOME`, `/tmp`, system paths. The user can't see files you put there. Put anything they should see in the project dir.
+- Background processes (dev servers, watchers) die when the session ends.
+- If a `.venv` breaks (`bad interpreter`, `Exec format error`): run `uv sync` in a uv project, otherwise `uv venv --clear` and reinstall. (Typical cause: it was built on the host or another CPU arch.)
+- Global installs are **shared by every project and agent** that uses this toolchain. Pin versions (`uvx ruff@0.6.9`, `prettier@3`), prefer `uvx`/`npx` or a project venv for anything version-sensitive, and never upgrade or uninstall `npm`, `node`, `uv` or the agent CLIs themselves. `npx -y` runs whatever it downloads, so stick to well-known packages.
 
 ## Git, GitHub, GitLab
-- `gh` and `glab` use the user's saved config; git over SSH uses the user's mounted `~/.ssh`. Check with `gh auth status` / `glab auth status`.
-- If a token is reported invalid or expired, you cannot fix it — tell the user to re-run `gh auth login` / `glab auth login` (inside the sandbox, or on the host config).
-- Prefer `gh`/`glab` (e.g. `gh pr create`, `gh api`, `glab mr create`, `glab api`) over scraping web pages.
+- `gh` / `glab` use config saved by Agent Box (not the user's host config; host `GH_TOKEN`/`GITLAB_TOKEN` are not forwarded). Git over SSH uses the mounted `~/.ssh`. Check with `gh auth status` / `glab auth status`.
+- If a token is invalid or expired you can't fix it. Ask the user to run `gh auth login` / `glab auth login` in an Agent Box shell (`agtbox.py bash`).
+- Prefer `gh` / `glab` (`gh pr create`, `gh api`, `glab mr create`, `glab api`) over scraping web pages.
 
 ## Gotchas
-- Install failures with "could not resolve host"/TLS errors usually mean the network or proxy blocks that host; report the host rather than retrying repeatedly.
-- Don't install into system locations or edit files outside the project; those are read-only by design.
-- A tool you install globally is visible to other projects and sessions — prefer `uvx`/`npx` or a project-local venv for throwaway or version-sensitive needs.
+- "could not resolve host" or TLS errors usually mean the network or proxy blocks that host — report the host rather than retrying repeatedly.
+- Behind a TLS-intercepting proxy `curl`/git may work while tools with their own CA bundles fail: uv → `UV_SYSTEM_CERTS=1` (older uv: `UV_NATIVE_TLS=1`); node/npm → `NODE_OPTIONS=--use-openssl-ca`.
+- Servers you start on `127.0.0.1:PORT` are reachable from the host under bwrap, but not under podman (no published ports).

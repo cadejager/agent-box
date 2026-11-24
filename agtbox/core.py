@@ -42,7 +42,6 @@ AGENT_ENV = [
     f"PATH={AGENT_TOOLS}/bin:{AGENT_TOOLS}/node/bin:/usr/bin:/bin",
     f"npm_config_prefix={AGENT_TOOLS}",
     f"npm_config_cache={AGENT_CACHE}/npm",
-    f"PIP_PREFIX={AGENT_TOOLS}",
     f"PYTHONUSERBASE={AGENT_TOOLS}",
     f"PIP_CACHE_DIR={AGENT_CACHE}/pip",
     "PIP_BREAK_SYSTEM_PACKAGES=1",
