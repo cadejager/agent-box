@@ -14,12 +14,23 @@ AGENT_CONFIG = f"{HOME}/.config/agent-box"
 AGENT_STATE = f"{HOME}/.local/state/agent-box"
 AGENT_CACHE = f"{HOME}/.cache/agent-box"
 IMAGE = "agent-box"
+# Skill shipped with the launcher, bound read-only into each agent's skills dir
+# so it sits beside (never replaces) the agent's own skills.
+SKILL_NAME = "agent-box"
+SKILL_SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "skills", SKILL_NAME)
+
+
+def skill_bind(skills_dir):
+    """A read-only Bind of the bundled skill at <skills_dir>/<SKILL_NAME>."""
+    return Bind(SKILL_SRC, f"{skills_dir}/{SKILL_NAME}", "ro")
 
 
 @dataclass
 class Bind:
     """A host->sandbox mount. kind: 'dir'/'file' both emit a bind arg (file is
-    seeded '{}' if absent); 'seed' emits NO bind arg -- it is written inside an
+    seeded '{}' if absent); 'ro' is a read-only bind of an existing
+    host path (never created); 'seed' emits NO bind arg -- it is written inside an
     already-bound dir (see core.ensure_sources)."""
     src: str
     dst: str
@@ -31,13 +42,14 @@ AGENT_ENV = [
     f"PATH={AGENT_TOOLS}/bin:{AGENT_TOOLS}/node/bin:/usr/bin:/bin",
     f"npm_config_prefix={AGENT_TOOLS}",
     f"npm_config_cache={AGENT_CACHE}/npm",
-    f"PIP_PREFIX={AGENT_TOOLS}",
     f"PYTHONUSERBASE={AGENT_TOOLS}",
     f"PIP_CACHE_DIR={AGENT_CACHE}/pip",
     "PIP_BREAK_SYSTEM_PACKAGES=1",
     f"UV_CACHE_DIR={AGENT_CACHE}/uv",
     f"UV_TOOL_DIR={AGENT_TOOLS}/uv/tools",
     f"UV_TOOL_BIN_DIR={AGENT_TOOLS}/bin",
+    f"UV_PYTHON_INSTALL_DIR={AGENT_TOOLS}/uv/python",
+    f"UV_PYTHON_BIN_DIR={AGENT_TOOLS}/bin",
 ]
 # Generic (non-agent) env, applied for every agent. Agent-specific vars
 # (ANTHROPIC_*, OPENAI_*, OPENCODE_*, CLAUDE_CODE_*) live on the agent plugins.
@@ -89,7 +101,7 @@ SHARED_BINDS = [
 def ensure_sources(binds):
     """Create host-side bind sources so a fresh user can launch. `binds` is the
     full merged list (shared + agent). dir/file -> create the dir; file -> seed
-    '{}' if absent; seed -> create an empty file inside its (already-created) dir.
+    '{}' if absent; ro -> must already exist (else exit with a clear error); seed -> create an empty file inside its (already-created) dir.
     NB: synthetic passwd/group identity files are NOT generated here -- they are a
     bwrap-only concern, generated in Bwrap.prepare."""
     for d in (AGENT_TOOLS, f"{AGENT_CACHE}/npm", f"{AGENT_CACHE}/pip", f"{AGENT_CACHE}/uv"):
@@ -102,6 +114,11 @@ def ensure_sources(binds):
             if not os.path.exists(b.src):
                 with open(b.src, "w") as fh:
                     fh.write("{}")
+        elif b.kind == "ro":
+            if not os.path.exists(b.src):
+                print(f"Error: bundled read-only bind source is missing: {b.src}",
+                      file=sys.stderr)
+                sys.exit(1)
         elif b.kind == "seed":
             os.makedirs(os.path.dirname(b.src), exist_ok=True)
             if not os.path.exists(b.src):

@@ -89,7 +89,8 @@ class Bwrap(Sandbox):
         bw += self.fmt_env(env_pairs)
         return bw
 
-    def build_run_argv(self, ctx, cmd=None):
+    def build_run_argv(self, ctx, cmd=None, tty=None):
+        # tty is accepted for interface parity: bwrap never allocates a terminal.
         bw = self.base_args(ctx.env)
         bw += ["--bind", ctx.app_dir, ctx.app_dir, "--chdir", ctx.app_dir]
         bw += self.bind_args(ctx)

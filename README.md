@@ -9,7 +9,7 @@ The implementation is the `agtbox/` Python package; `bin/agtbox.py` is a thin sh
 - **Isolation.** Each agent runs in a fresh sandbox: under bwrap your real `$HOME` is replaced by an empty tmpfs and the whole filesystem is read-only except a handful of dirs; under podman the rootfs is a throwaway image and the host filesystem isn't visible at all except the same handful of dirs. Either way the agent can only persist to the project and to `~/.{config,cache,local/share,local/state}/agent-box`. A prompt-injected agent can't read your dotfiles/keys or scribble on your system.
 - **Uses what you already have.** System packages (python, git, ripgrep, gcc, …) come straight from your host. Only the bits that aren't system-wide — node, `uv`, the three agent CLIs, and the GitHub/GitLab CLIs (`gh`/`glab`) — are installed into a per-user toolchain on first run.
 - **One launcher, no obfuscation.** `agtbox.py` runs any of the three agents and passes each agent's *own* flags straight through — put them after a `--` separator (`agtbox.py claude -- --resume`) and there's nothing else to learn.
-- **Config and tools persist; the sandbox doesn't.** Your agent config lives in `~/.config/agent-box`, the toolchain + anything an agent installs globally lives in `~/.local/share/agent-box`, and download caches in `~/.cache/agent-box` — all bound in, so logins, history, and installed tools survive while each run starts from a clean sandbox.
+- **Config and tools persist; the sandbox doesn't.** Your agent config lives in `~/.config/agent-box`, the toolchain + anything an agent installs globally lives in `~/.local/share/agent-box/<arch>`, and download caches in `~/.cache/agent-box` — all bound in, so logins, history, and installed tools survive while each run starts from a clean sandbox.
 
 ## Requirements
 
@@ -64,45 +64,60 @@ Session handling is just each agent's native syntax, after `--`: claude `--conti
 
 opencode is **v2**, launched `--standalone` (a private server per run) with its shared background service disabled. Upgrading from v1: `./bin/agtbox.py -u opencode`. V1 plugins don't run under v2 — port them in your opencode config (`~/.config/agent-box/opencode`), which also gains a `service.json` to commit or gitignore.
 
-OpenCode keeps its existing **shared database, logins, config, state, cache, and
-software environment**. The database remains under
-`~/.local/share/agent-box/<arch>/opencode/`, mounted as
-`~/.local/share/opencode` inside each sandbox. There is no per-project database,
-credential import, or history migration. Existing database/WAL files are left
-intact; the host's `OPENCODE_DB` is not forwarded. `-a` still sets the sandbox's
-working directory and primary writable project mount, even when launched from a
-subdirectory. Standalone execution keeps project filesystem access scoped to that
-sandbox's mounts.
+OpenCode shares its **config, state, cache, and software environment** across
+projects. Its data lives under `~/.local/share/agent-box/<arch>/opencode/`,
+mounted as `~/.local/share/opencode` inside each sandbox. The host's
+`OPENCODE_DB` is not forwarded. `-a` still sets the sandbox's working directory
+and primary writable project mount, even when launched from a subdirectory.
 
-When the OpenCode **data directory is on a network filesystem** (NFS, Lustre,
-GPFS, CIFS/SMB, Ceph), Agent Box allows only **one
-OpenCode launch at a time across all projects and front ends sharing its database**.
-It uses this global lock:
+**On local disks** nothing changes: every project uses the one shared
+`opencode.db` and launches run concurrently.
+
+**When the data directory is on a network filesystem** (NFS, Lustre, GPFS,
+CIFS/SMB, Ceph), or when detection fails (with a warning), each project gets its
+own database and lock, so different projects run at the same time from any host:
 
 ```
-~/.local/share/agent-box/opencode-<arch>.launch.lock
+~/.local/share/agent-box/<arch>/opencode/projects/<name>-<hash>.db    # the project's database
+~/.local/share/agent-box/<arch>/opencode/projects/<name>-<hash>.path  # which project it belongs to
+~/.local/share/agent-box/<arch>/opencode/projects/<name>-<hash>.lock  # held while it runs
 ```
 
-Detection checks the data directory's backing filesystem on the launcher host
-(`stat -f` on Linux; the mount table on macOS), including symlink targets. If
-detection fails, the launcher prints a warning and uses the lock. Other
-storage keeps the ordinary concurrent-launch behavior. This is a cooperative lock:
-OpenCode launched outside the updated harness does not participate.
+`<name>` is the project directory's name and `<hash>` comes from its real path on
+the launching node. Moving or renaming a project starts a fresh database (the old
+one stays); a project reached through different mount paths on different nodes
+gets different databases. The old shared `opencode.db` is left untouched; its
+history is still readable on a local-disk host or with `AGTBOX_OPENCODE_NETFS=0`.
 
-The lock covers setup and the sandbox's lifetime. A blocked launch prints the
-owner's host, launcher PID, start time, project, and an exact `rm -- .../opencode-<arch>.launch.lock`
-recovery command. Normal exit or a handled termination removes the lock. A killed
-launcher or crashed host can leave it behind: remove it only after confirming the
-original run has stopped or its node is down. Locks are never broken automatically
-based on age or a PID check on a different host.
+A second launch of the **same project** is refused with the owner's host,
+launcher PID, start time, project, and an exact `rm -- …/<name>-<hash>.lock`
+recovery command. A killed launcher or crashed host can leave the lock behind:
+remove it only after confirming the original run has stopped or its node is down.
+Locks are never broken automatically. The lock is cooperative (OpenCode run
+outside Agent Box ignores it) and it doesn't make SQLite's
+[WAL mode network-safe](https://sqlite.org/wal.html); it only keeps two Agent Box
+launches off one database.
 
-Session history and logins persist across restarts and front ends that share the
-same home **and architecture-specific data directory**. The existing layout does
-not merge OpenCode databases between CPU architectures. No temporary database,
-local staging, or synchronization is introduced. Serializing launches reduces
-concurrent database access; it does **not** fix SQLite's underlying
-[WAL limitations on network filesystems](https://sqlite.org/wal.html). NFS-related
-hangs or locking errors may still need further work.
+**Logins carry over to new projects.** When a session ends, Agent Box copies its
+stored credentials into `~/.local/share/agent-box/opencode/credentials.json`
+(private to you, shared by every CPU architecture, invisible to agents). A
+project's *first* launch starts with those credentials. Log in once in any
+project and every new project after it is authenticated. Limits:
+
+- Projects that already have a database don't pick up later logins; log in there
+  too if a key changes.
+- If copying the credentials into a new project fails, Agent Box warns and that
+  project starts without them (it isn't retried); log in there once.
+- Logging out in one project doesn't remove the credential from the master.
+- An old project with an outdated key can overwrite a newer one in the master
+  when it exits; log in again to fix it.
+- If two projects finish at the same moment, one of them warns that its changes
+  weren't saved to the master (its own database still has them).
+- Sign-in (OAuth) logins are copied too, but their refresh tokens rotate, so
+  copies in other projects can go stale.
+
+Set `AGTBOX_OPENCODE_NETFS=1` to use per-project databases on a local disk (for
+testing), or `0` to force the shared database.
 
 `./bin/agtbox.py -u claude` updates the toolchain and claude's npm package in place, then runs. Run with `-u` any time you want to pull the latest agent CLIs.
 
@@ -110,12 +125,13 @@ hangs or locking errors may still need further work.
 
 - **Package + shim.** The implementation lives in the `agtbox/` Python package (stdlib only). `bin/agtbox.py` is a thin shim — it adds the repo root to `sys.path` and calls `agtbox.cli.main()`. You can also run it as `python3 -m agtbox`.
 - **Agents and sandboxes are discovered at runtime.** `cli.main()` scans `agtbox/agents/` and `agtbox/sandboxes/` for subclasses of `Agent` and `Sandbox` — no hardcoded lists. The argparse `agent` choices and the `-s` sandbox choices are built from whatever is found. Fork the repo and drop a new file in either directory to add a plugin without touching any other code.
-- **One launcher, two sandboxes.** `cli.main()` builds a `bwrap …` (or `podman run …`) command as an argv array — no `eval`. Most launches exec it; when OpenCode needs the network-filesystem lock, its launcher stays alive to forward signals and wait for sandbox exit before releasing the lock. Agent plugins supply their binds and environment, using the same tables for both sandboxes.
-- **Locked-down sandbox (bwrap).** `/usr`, `/bin`, `/lib`, `/etc`, … are bound **read-only**; `$HOME` and `/tmp` are fresh tmpfs; networking is shared (the agents reach their APIs); and only these are writable, each bound at its real path: your **project**, `~/.config/agent-box`, `~/.local/share/agent-box`, `~/.local/state/agent-box`, `~/.cache/agent-box`. Nothing else on the host is even visible.
+- **One launcher, two sandboxes.** `cli.main()` builds a `bwrap …` (or `podman run …`) command as an argv array — no `eval`. Most launches exec it; on a network filesystem OpenCode's launcher stays alive instead: it takes the per-project lock, seeds a new project's database with the master credentials, forwards signals and waits for the sandbox to exit, then saves the session's credentials back to the master before releasing the lock. Agent plugins supply their binds and environment, using the same tables for both sandboxes.
+- **Locked-down sandbox (bwrap).** `/usr`, `/bin`, `/lib`, `/etc`, … are bound **read-only**; `$HOME` and `/tmp` are fresh tmpfs; networking is shared (the agents reach their APIs); and only these are writable, each bound at its real path: your **project**, `~/.config/agent-box`, `~/.local/share/agent-box/<arch>` (only the per-arch toolchain dir — OpenCode's master credentials in `~/.local/share/agent-box/opencode/` stay outside the sandbox), `~/.local/state/agent-box`, `~/.cache/agent-box`. Nothing else on the host is even visible.
 - **Container sandbox (podman).** When bwrap isn't available, the same dirs are bind-mounted (`-v`, with `:ro` for `-r`) at the same paths into a throwaway container built from `container/Containerfile` (`debian:trixie` + git/ripgrep/openssh-client/build-essential/… — node/uv/the CLIs stay in the bind-mounted toolchain, so an image rebuild never touches them). It runs as the container's root, which rootless podman maps to your host user, so the files the agent writes stay owned by you; networking is shared. The image auto-builds on first use; `-b` rebuilds it.
-- **Persistent toolchain + global installs.** `~/.local/share/agent-box/<arch>` holds node, `uv`, the agent CLIs, the `gh`/`glab` git-hosting CLIs, and anything an agent installs globally (`npm -g`, `pip`, `uv tool` — outside a venv). It persists across runs and is shared between agents, so installs stick around and the CLIs can auto-update. It's **namespaced by CPU architecture** (`x86_64`, `aarch64`, …) so a single shared home can serve machines of different arches (see the shared-filesystem caveat below); your config, state, and caches stay un-namespaced and shared. Project dependencies still belong in the project (a `.venv`, `node_modules`, …).
+- **Persistent toolchain + global installs.** `~/.local/share/agent-box/<arch>` holds node, `uv`, the agent CLIs, the `gh`/`glab` git-hosting CLIs, and anything an agent installs globally (`npm -g`, `uv tool`, `uv python install 3.12` — which also puts `python3.12` on the PATH — and `pip install --user`). It persists across runs and is shared between agents, so installs stick around and the CLIs can auto-update. It's **namespaced by CPU architecture** (`x86_64`, `aarch64`, …) so a single shared home can serve machines of different arches (see the shared-filesystem caveat below); your config and state stay un-namespaced and shared. Plain `pip install` targets the system Python, which is read-only in bwrap, so use `uv`, a venv, or `pip install --user`. Project dependencies still belong in the project (a `.venv`, `node_modules`, …).
 - **Config, wired straight in.** Each agent's config is bound from `~/.config/agent-box/<agent>` onto the path the agent expects (`~/.claude`, `~/.codex`, opencode's XDG dirs, `~/.claude.json`, `gh`/`glab`/`git` config so logins and git identity persist, and `~/.ssh` so SSH keys/`known_hosts` are available for git push). Drop your SSH key into `~/.config/agent-box/ssh/`. One dir to back up or wipe.
-- **Download caches** (npm/pip/uv) live in `~/.cache/agent-box` and persist, so re-installs are fast.
+- **Download caches** (npm/pip/uv) live in `~/.cache/agent-box` and persist, so re-installs are fast. The OpenCode and omos caches hold downloaded native binaries (e.g. `rg`), so they're per CPU arch: `~/.cache/agent-box/<arch>/opencode` and `…/omos`.
+- **A bundled skill.** `skills/agent-box/SKILL.md` tells the agent what its sandbox provides (`uv`/`uvx`/`npm`/`npx`/`gh`/`glab`, how to get more software without asking, what persists). It's mounted read-only as a single `agent-box` directory inside the agent's own skills dir (`~/.claude/skills` for Claude, `~/.agents/skills` for Codex, opencode, and omos), so the agent's own skills are untouched. Put your own skills in `~/.config/agent-box/claude/skills/` (Claude) or `~/.config/agent-box/opencode/skills/` (opencode). Don't name your own skill `agent-box`: that name is the bundled mount point, which also leaves an empty `agent-box` directory in your Claude skills folder.
 
 ## Pointing an agent at a local model
 
@@ -138,6 +154,7 @@ agtbox/
     base.py               # Agent ABC
     claude.py             # Claude Code
     opencode.py           # opencode
+    omos.py               # omos (opencode-based)
     codex.py              # OpenAI Codex
     bash.py               # audit shell
   sandboxes/
@@ -146,6 +163,9 @@ agtbox/
     podman.py             # podman sandbox
 bin/
   agtbox.py               # thin shim: sys.path + agtbox.cli.main()
+skills/
+  agent-box/
+    SKILL.md              # bundled skill, mounted read-only into each agent's skills dir
 container/
   Containerfile           # the podman sandbox's image (debian:trixie + runtime/build packages)
 test/
@@ -169,11 +189,12 @@ CLAUDE.md                 # terse architecture reference (for AI assistants)
 - **Concurrent runs share** the config/cache/toolchain dirs (so agents see each other's installs); simultaneous installs of the same package could race.
 - **Shared network.** The agent reaches the network like the host does — including services on `127.0.0.1` and cloud metadata endpoints. That's required for it to reach its APIs, but don't bind sensitive dev services to loopback while an agent is running.
 - **Recommended host hardening (TTY injection).** A sandboxed process sharing your terminal can use the legacy `TIOCSTI` ioctl to push keystrokes into your shell — commands that would run *after* the agent exits. Close it once on the host (it's the kernel default on some distros but not all): `echo 'dev.tty.legacy_tiocsti=0' | sudo tee /etc/sysctl.d/99-agtbox.conf && sudo sysctl --system`. This doesn't affect clipboard copy/paste (that's OSC 52 / `xclip`-style, unrelated to `TIOCSTI`).
-- **macOS / podman.** podman runs a Linux VM that shares your `$HOME`, so the `agent-box` dirs and your project must live **under `$HOME`**.
-- **Shared home across different-arch machines (HPC).** If the same `$HOME` is mounted on nodes of different CPU architectures (e.g. x86_64 and aarch64), that's fine: the toolchain lives under `~/.local/share/agent-box/<arch>`, so each arch installs and uses its own native binaries while sharing config, state, and download caches. The first run on each new arch does its own one-time install.
+- **macOS / podman.** podman runs a Linux VM that shares your `$HOME`, so the `agent-box` dirs, your project, and this repo checkout (the bundled skill is mounted from it) must live **under `$HOME`**.
+- **Shared home across different-arch machines (HPC).** If the same `$HOME` is mounted on nodes of different CPU architectures (e.g. x86_64 and aarch64), that's fine: the toolchain lives under `~/.local/share/agent-box/<arch>`, so each arch installs and uses its own native binaries while sharing config, state, and npm/pip/uv caches. The first run on each new arch does its own one-time install.
 - **Behind a corporate proxy?** If a TLS-intercepting proxy sits between you and the internet, the **podman** sandbox bakes your company's CA certs into the image at build time: drop them (PEM, `.crt` extension) into `~/.local/share/certs/` (or set `AGENT_CERTS_DIR`) and they're trusted inside the container. The **bwrap** sandbox needs nothing — it reuses your host's own trust store (the `/etc` CA binds, plus `/var/lib/ca-certificates` on SLES/openSUSE, where `/etc/ssl` symlinks into `/var`), so whatever your host already trusts, the agents trust too. The launcher also forwards `http_proxy`/`https_proxy`/`no_proxy` (and the uppercase forms) into the sandbox when they're set.
 - **Locked-down network?** The agent CLIs (node + npm) are **required**; `uv`, `gh`, and `glab` are **auxiliary** and installed best-effort. They need only `github.com` and `gitlab.com`: the latest version is read from the `releases/latest` redirect, not from `api.github.com`, so there is no API host to allowlist and no API rate limit. The warning names the host each tool contacts first. If they're blocked while the node/npm registries are allowed, the install **warns and continues** — the core toolchain still completes (so the agents run) and isn't re-downloaded every launch. Re-run with `-u` to retry the skipped tools once they're reachable (e.g. via a proxy or once a host is allowlisted).
 - **Coming from the old build?** The old image-based build (and its Charliecloud path) is gone; podman is back as the macOS sandbox but now uses a slim `agent-box` image built on demand. Config in `~/.config/agent-box` carries over; `podman image rm agent-box` forces a fresh image build next run.
+- **Upgrading the caches.** The old shared `~/.cache/agent-box/opencode` and `~/.cache/agent-box/omos` dirs are no longer used and can be deleted. Each arch downloads its own cache once on first run.
 - See [`CLAUDE.md`](CLAUDE.md) for the architecture-level reference.
 
 ## License

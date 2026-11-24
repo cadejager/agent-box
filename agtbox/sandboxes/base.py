@@ -4,6 +4,68 @@ import signal
 import subprocess
 import sys
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
+
+
+CAPTURE_TIMEOUT_CODE = 124  # like timeout(1)
+
+
+class SignalGuard:
+    """The launcher's signal handling for a sandbox lifetime that spans several
+    children (setup, credential commands, the agent).
+
+    SIGTERM/SIGHUP go to the attached child. Unless that child is the agent
+    (attached with deliver_pending=True) they are also recorded in `pending`, and
+    the agent receives every recorded signal when it is attached: a SIGTERM that
+    stops setup or a credential command must still stop the agent that would
+    start next. Credential commands never receive signals sent before they ran.
+    A terminal hangup can signal only the launcher as session leader, so SIGHUP
+    must be forwarded. SIGINT runs a Python no-op: terminal Ctrl-C already reaches
+    the foreground process group, and unlike SIG_IGN a Python handler resets on
+    exec, so children keep default Ctrl-C handling.
+    """
+
+    def __init__(self):
+        self.child = None
+        self.pending = []
+        self._child_is_agent = False
+        self._previous = {}
+
+    def _forward(self, signum, frame):
+        if self.child is not None:
+            self.child.send_signal(signum)
+        if self.child is None or not self._child_is_agent:
+            self.pending.append(signum)
+
+    @staticmethod
+    def _ignore(signum, frame):
+        pass
+
+    def __enter__(self):
+        handlers = {signal.SIGTERM: self._forward, signal.SIGINT: self._ignore,
+                    signal.SIGHUP: self._forward}
+        self._previous = {s: signal.signal(s, h) for s, h in handlers.items()}
+        return self
+
+    def __exit__(self, *exc):
+        for signum, handler in self._previous.items():
+            signal.signal(signum, handler)
+        return False
+
+    def attach(self, child, deliver_pending):
+        # Mark the child's role before publishing it, so a signal landing between
+        # the two assignments is not both forwarded to the agent and recorded.
+        self._child_is_agent = deliver_pending
+        self.child = child
+        if deliver_pending:
+            pending, self.pending = self.pending, []
+            for signum in pending:
+                child.send_signal(signum)
+
+    def detach(self):
+        # Unpublish the child first: from then on every signal is recorded.
+        self.child = None
+        self._child_is_agent = False
 
 
 class Sandbox(ABC):
@@ -19,7 +81,7 @@ class Sandbox(ABC):
     @abstractmethod
     def fmt_bind(self, src, dst, ro): ...
     @abstractmethod
-    def build_run_argv(self, ctx, cmd=None): ...
+    def build_run_argv(self, ctx, cmd=None, tty=None): ...
     @abstractmethod
     def install_machine(self): ...
     @abstractmethod
@@ -39,7 +101,7 @@ class Sandbox(ABC):
         for b in ctx.binds:
             if b.kind == "seed":
                 continue
-            args += self.fmt_bind(b.src, b.dst, False)
+            args += self.fmt_bind(b.src, b.dst, b.kind == "ro")
         for m in ctx.volumes:
             args += self.fmt_bind(m, m, False)
         for m in ctx.ro_volumes:
@@ -53,35 +115,70 @@ class Sandbox(ABC):
         argv = self.build_run_argv(ctx)
         os.execvp(argv[0], argv)
 
-    def wait(self, ctx):
-        """Run without exec so the caller can clean up; returns the exit status."""
-        child = None
-        pending = []
-
-        def forward(signum, frame):
-            if child is None:
-                pending.append(signum)
-            else:
-                child.send_signal(signum)
-
-        def ignore(signum, frame):
-            # Terminal Ctrl-C already signals the child's process group. A
-            # Python handler (not SIG_IGN) resets on exec, preserving Ctrl-C.
-            pass
-
-        # A terminal hangup can send SIGHUP only to this session leader, so it
-        # must be forwarded even though terminal SIGINT is not re-sent.
-        handlers = {signal.SIGTERM: forward, signal.SIGINT: ignore, signal.SIGHUP: forward}
-        previous = {s: signal.signal(s, h) for s, h in handlers.items()}
-        try:
+    def wait(self, ctx, guard=None):
+        """Run without exec so the caller can clean up; returns the exit status.
+        A caller whose cleanup also runs children passes its own SignalGuard."""
+        with (SignalGuard() if guard is None else nullcontext(guard)) as active:
             with subprocess.Popen(self.build_run_argv(ctx)) as child:
-                for signum in pending:
-                    child.send_signal(signum)
-                code = child.wait()
-            return code if code >= 0 else 128 - code
-        finally:
-            for signum, handler in previous.items():
-                signal.signal(signum, handler)
+                active.attach(child, deliver_pending=True)
+                try:
+                    # Poll: a signal landing just before a blocking waitpid would
+                    # defer its Python handler (the forward) until the child exits.
+                    while True:
+                        try:
+                            code = child.wait(timeout=0.5)
+                            break
+                        except subprocess.TimeoutExpired:
+                            pass
+                finally:
+                    active.detach()
+        return code if code >= 0 else 128 - code
+
+    def capture_argv(self, ctx, cmd):
+        """argv for a captured command; a sandbox may add what its timeout
+        cleanup needs (podman names the container)."""
+        return self.build_run_argv(ctx, cmd, tty=False)
+
+    def cleanup_after_timeout(self, argv):
+        """Stop whatever of a timed-out capture outlived its killed session.
+        Returns only once it is gone (or gave up with a warning). Nothing by
+        default: bwrap's --die-with-parent takes the sandbox down with it."""
+
+    def capture(self, ctx, cmd, stdin=None, timeout=None, guard=None):
+        """Run `cmd` in the sandbox without a TTY; return (returncode, stdout).
+
+        `stdin` (str) is piped in, else /dev/null; stderr passes through. The child
+        gets its own session so terminal Ctrl-C cannot interrupt it; with `guard`,
+        SIGTERM/SIGHUP received while it runs are forwarded to it. A timeout kills
+        it, runs `cleanup_after_timeout`, and returns (CAPTURE_TIMEOUT_CODE, "").
+        """
+        argv = self.capture_argv(ctx, cmd)
+        with subprocess.Popen(argv, encoding="utf-8", errors="replace",
+                              start_new_session=True,
+                              stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
+                              stdout=subprocess.PIPE) as child:
+            if guard is not None:
+                guard.attach(child, deliver_pending=False)
+            try:
+                out, _ = child.communicate(stdin, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # Kill the whole session (the child leads its own): under podman
+                # the client is only one of several processes holding the pipe.
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                child.kill()
+                try:
+                    child.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass  # something outside the session still holds the pipe; give up
+                self.cleanup_after_timeout(argv)
+                return CAPTURE_TIMEOUT_CODE, ""
+            finally:
+                if guard is not None:
+                    guard.detach()
+        return child.returncode, out
 
     def run_setup(self, ctx):
         if not ctx.agent.setup_args:

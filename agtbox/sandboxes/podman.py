@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from agtbox import core
 from agtbox.sandboxes.base import Sandbox
@@ -79,17 +80,46 @@ class Podman(Sandbox):
         except OSError:
             pass
 
-    def build_run_argv(self, ctx, cmd=None):
+    def build_run_argv(self, ctx, cmd=None, tty=None):
         # -t (allocate a TTY) only when actually attached to one, so an interactive
         # TUI works in a real terminal AND `agtbox bash -- -c ...` works in a pipe/CI
         # (podman -it in a non-TTY dies "the input device is not a TTY"). -i always.
-        tty = ["-t"] if sys.stdin.isatty() and sys.stdout.isatty() else []
-        pd = ["run", "-i", *tty, "--rm", "--security-opt", "label=disable"]
+        # tty=False forces no TTY: captured commands pipe stdin/stdout, and a TTY
+        # would merge stderr into stdout and turn newlines into CRLF.
+        if tty is None:
+            tty = sys.stdin.isatty() and sys.stdout.isatty()
+        pd = ["run", "-i", *(["-t"] if tty else []), "--rm", "--security-opt", "label=disable"]
         pd += self.env_args(ctx)
         pd += self._toolchain_mounts()
         pd += ["-v", f"{ctx.app_dir}:{ctx.app_dir}", "-w", ctx.app_dir]
         pd += self.bind_args(ctx)
         return ["podman", *pd, "--", core.IMAGE, *(cmd or self.command(ctx))]
+
+    def capture_argv(self, ctx, cmd):
+        # A unique name so a timeout can remove the container: killing the podman
+        # client leaves conmon running it, and the command is PID 1, which
+        # ignores the SIGTERM podman would forward.
+        argv = self.build_run_argv(ctx, cmd, tty=False)
+        return argv[:2] + ["--name", f"agtbox-capture-{uuid.uuid4().hex[:16]}"] + argv[2:]
+
+    def cleanup_after_timeout(self, argv):
+        name = argv[argv.index("--name") + 1]
+        # --time 0 kills at once instead of waiting 10 s for a SIGTERM PID 1
+        # ignores; --ignore because the client may have died before creating it.
+        try:
+            rm = subprocess.run(["podman", "rm", "--force", "--ignore", "--time", "0", name],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                text=True, timeout=30)
+            if rm.returncode == 0:
+                return
+            reason = (rm.stderr or "").strip() or f"exit {rm.returncode}"
+        except (OSError, subprocess.TimeoutExpired) as e:
+            reason = str(e)
+        try:
+            print(f"Agent Box: warning: couldn't remove timed-out container {name} "
+                  f"({reason}); run `podman rm -f {name}`.", file=sys.stderr)
+        except OSError:
+            pass
 
     def _toolchain_mounts(self):
         # The rw toolchain + cache binds, shared by run and install so they can't drift.

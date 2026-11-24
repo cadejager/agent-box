@@ -35,7 +35,7 @@ Subclass `agtbox.agents.base.Agent` and set what you need. Everything except
 | `binds` | property `list[core.Bind]` | `[]` | The agent's own config/state directories to persist across runs (see below). |
 | `env_forward` | class attr `tuple[str]` | `()` | Env var **names** forwarded from the host **only when set** — API keys, base URLs, model overrides. An unset var is never passed (so it can't shadow mounted config). |
 | `env_literal` | class attr `tuple[str]` | `()` | `"KEY=VALUE"` strings **always** set for this agent (feature flags, etc.). |
-| `run(sandbox, ctx)` | method | setup, then exec | Launch the agent after sandbox/toolchain preparation. On a network filesystem, OpenCode holds its shared launch lock across setup and `sandbox.wait(ctx)`, which forwards termination signals and returns the exit status. |
+| `run(sandbox, ctx)` | method | setup, then exec | Launch the agent after sandbox/toolchain preparation. On a network filesystem, OpenCode uses a per-project database and lock, held across setup, credential seeding, `sandbox.wait(ctx)` (which forwards termination signals and returns the exit status) and the credential push-back. |
 
 Use **tuples** (not lists) for `packages`/`obsolete_packages`/`default_args`/`setup_args`/`env_forward`/`env_literal` so the
 shared class-level default can never be mutated in place and leak between agents.
@@ -50,19 +50,28 @@ wherever the tool looks:
 - `core.AGENT_CONFIG` — config (`~/.config/agent-box`)
 - `core.AGENT_TOOLS` — data / installed files (`~/.local/share/agent-box/<arch>`)
 - `core.AGENT_STATE` — state (`~/.local/state/agent-box`)
-- `core.AGENT_CACHE` — disposable cache (`~/.cache/agent-box`)
+- `core.AGENT_CACHE` — disposable cache (`~/.cache/agent-box`; use a per-arch
+  subdir, `{core.AGENT_CACHE}/{core.ARCH}/<agent>`, when it holds native binaries)
 
 `kind` (default `"dir"`):
 
 - `"dir"` — bind the directory (created on the host if absent).
 - `"file"` — bind a single file, seeded with `{}` if absent (for tools that
   demand a valid-JSON file, e.g. `~/.claude.json`).
+- `"ro"` — bind an **existing** path read-only (e.g. the bundled skill via
+  `core.skill_bind`). Never created: if the source is missing the launcher exits
+  with a clear error.
 - `"seed"` — **not mounted**; an empty file created inside an already-bound dir,
   for tools that write via temp-file-and-rename and can't have the target itself
   be a mountpoint (this is how the shared git config is handled).
 
 You do **not** declare git/gh/glab/ssh here — those are shared infrastructure
 that `core.SHARED_BINDS` provides to every agent automatically.
+
+If the agent supports skills, also add `core.skill_bind(<its skills dir>)`
+(e.g. `~/.claude/skills`, `~/.agents/skills`). It mounts the bundled
+`skills/agent-box` read-only *inside* that dir, beside the user's own skills.
+`bash` deliberately has none.
 
 ## Worked example
 
@@ -90,5 +99,5 @@ its config persists under `~/.config/agent-box/gemini`, and `GEMINI_API_KEY` is
 forwarded when you have it exported.
 
 See `claude.py` (dir + JSON-file binds, several forwards), `opencode.py` (shared
-data/state/config/cache and a conditional network-filesystem launch lock), `codex.py` (minimal), and `bash.py` (degenerate: a system
+data/state/config/cache, and per-project databases and locks on network filesystems), `codex.py` (minimal), and `bash.py` (degenerate: a system
 binary, no packages/binds/env) for real examples.
