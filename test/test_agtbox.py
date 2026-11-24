@@ -81,6 +81,7 @@ class LauncherTest(unittest.TestCase):
         env = dict(os.environ)
         env["PATH"] = path if path is not None else f"{self.stub}:{env['PATH']}"
         env["PYTHONPATH"] = str(REPO)          # make `-m agtbox` importable
+        env.pop("AGTBOX_OPENCODE_NETFS", None)  # tests choose the path via the stat stub
         if drop_home:
             env.pop("HOME", None)
         elif set_home:
@@ -234,10 +235,13 @@ class PodmanArgv(LauncherTest):
 
 class Tools(LauncherTest):
     @unittest.skipUnless(sys.platform.startswith("linux"), "uses GNU stat stub")
-    def test_opencode_shared_storage_in_both_sandboxes(self):
+    def test_opencode_storage_in_both_sandboxes(self):
+        from agtbox.opencode_store import project_id
         data = self.tools / "opencode"
         state = self.home / ".local/state/agent-box/opencode"
-        for fstype in ("nfs", "ext2/ext3"):
+        projects = data / "projects"
+        pid = project_id(str(self.app))
+        for fstype in ("ext2/ext3", "nfs"):
             (self.stub / "stat").write_text(f"#!/bin/sh\nprintf '{fstype}\\n'\n")
             for engine in ("bwrap", "podman"):
                 with self.subTest(engine=engine, fstype=fstype):
@@ -252,15 +256,22 @@ class Tools(LauncherTest):
                         self.assertArg(argv, f"{state}:{self.home}/.local/state/opencode")
                         self.assertArg(argv, "-w")
                     self.assertArg(argv, "--standalone")
-                    self.assertFalse(any("OPENCODE_DB" in arg for arg in argv))
-                    self.assertFalse((state / "projects").exists())
-                    self.assertFalse((self.tools.parent / f"opencode-{os.uname().machine}.launch.lock").exists())
-                    self.assertEqual("OpenCode launch lock:" in err, fstype == "nfs")
+                    network = fstype == "nfs"
+                    self.assertEqual(any(f"projects/{pid}.db" in arg for arg in argv), network)
+                    self.assertEqual(any("OPENCODE_DB" in arg for arg in argv), network)
+                    self.assertEqual("OpenCode launch lock:" in err, network)
+                    if network:
+                        self.assertEqual((projects / f"{pid}.path").read_text(),
+                                         f"{os.path.realpath(self.app)}\n")
+                        self.assertEqual(list(projects.glob("*.lock")), [])
+                    else:
+                        self.assertFalse(projects.exists())
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "uses GNU stat stub")
-    def test_opencode_nfs_lock_blocks_another_project_before_setup(self):
+    def test_opencode_nfs_lock_blocks_the_same_project_before_setup(self):
+        from agtbox.opencode_store import project_id
         (self.stub / "stat").write_text("#!/bin/sh\nprintf 'nfs\\n'\n")
-        lock = self.tools.parent / f"opencode-{os.uname().machine}.launch.lock"
+        lock = self.tools / "opencode/projects" / f"{project_id(str(self.app))}.lock"
         lock.parent.mkdir(parents=True, exist_ok=True)
         lock.write_text('{"host":"frontend-1","pid":123,"started":"earlier","project":"/other"}')
         for engine in ("bwrap", "podman"):
