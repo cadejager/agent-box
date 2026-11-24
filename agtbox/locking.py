@@ -2,7 +2,6 @@
 import json
 import os
 import re
-import shlex
 import socket
 import subprocess
 import sys
@@ -44,6 +43,15 @@ def filesystem_type(path):
     return fstype
 
 
+class LockHeld(Exception):
+    """Another owner holds a launch lock. Callers decide whether that is fatal."""
+
+    def __init__(self, path, details):
+        super().__init__(f"{path} is held: {details}")
+        self.path = path
+        self.details = details
+
+
 @contextmanager
 def launch_lock(path, project):
     """An exclusive-create lock file, usable on NFSv3+ as well as local disks.
@@ -61,12 +69,7 @@ def launch_lock(path, project):
                        f"since {owner['started']}, project {owner['project']}")
         except (OSError, ValueError, KeyError, TypeError):
             details = "owner information unavailable"
-        raise SystemExit(
-            "Agent Box: OpenCode is already locked by another launch.\n"
-            f"Owner: {details}\nLock file: {path}\n"
-            "If the original run has stopped or its node is down, remove the lock "
-            "and retry:\n"
-            f"  rm -- {shlex.quote(str(path))}") from None
+        raise LockHeld(path, details) from None
 
     with os.fdopen(fd, "w") as owner:
         try:

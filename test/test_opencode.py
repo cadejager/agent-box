@@ -12,9 +12,9 @@ from pathlib import Path
 from unittest import mock
 
 from agtbox import core
-from agtbox.agents.opencode import NETWORK_FSTYPES, Opencode
+from agtbox.agents.opencode import NETWORK_FSTYPES, Opencode, lock_held_exit
 from agtbox.context import RunContext
-from agtbox.locking import filesystem_type, launch_lock
+from agtbox.locking import LockHeld, filesystem_type, launch_lock
 
 
 class FilesystemType(unittest.TestCase):
@@ -132,8 +132,7 @@ class SharedStorage(unittest.TestCase):
 
         def while_locked(*args):
             self.assertTrue(self.lock.exists())
-            with self.assertRaisesRegex(SystemExit, "already locked"), \
-                 launch_lock(self.lock, "/other/project"):
+            with self.assertRaises(LockHeld), launch_lock(self.lock, "/other/project"):
                 self.fail("second project entered")
             return 7
 
@@ -158,8 +157,12 @@ class SharedStorage(unittest.TestCase):
         sandbox = mock.Mock()
         with launch_lock(self.lock, "/first/project"), \
              mock.patch("agtbox.agents.opencode.filesystem_type", return_value="nfs"), \
-             self.assertRaisesRegex(SystemExit, "project /first/project"):
+             self.assertRaises(SystemExit) as blocked:
             ctx.agent.run(sandbox, ctx)
+        message = str(blocked.exception.code)
+        self.assertIn("Agent Box: OpenCode is already locked by another launch.", message)
+        self.assertIn("project /first/project", message)
+        self.assertIn(f"rm -- {shlex.quote(str(self.lock))}", message)
         self.assertEqual(sandbox.method_calls, [])
 
     def test_setup_or_launch_failure_releases_lock_without_modifying_database(self):
@@ -193,19 +196,24 @@ class LaunchLock(unittest.TestCase):
             self.assertEqual(owner["host"], "frontend-1")
             self.assertEqual(owner["pid"], os.getpid())
             self.assertEqual(self.lock.stat().st_mode & 0o777, 0o600)
-            with self.assertRaises(SystemExit) as failure, launch_lock(self.lock, "/other-project"):
+            with self.assertRaises(LockHeld) as failure, launch_lock(self.lock, "/other-project"):
                 self.fail("second owner entered")
-            message = str(failure.exception)
+            self.assertEqual(failure.exception.path, self.lock)
+            self.assertIn("frontend-1", failure.exception.details)
+            message = str(lock_held_exit(failure.exception))
+            self.assertIn("Agent Box: OpenCode is already locked by another launch.", message)
             self.assertIn("frontend-1", message)
             self.assertIn("project /project", message)
             self.assertIn(str(os.getpid()), message)
+            self.assertIn(f"Lock file: {self.lock}", message)
+            self.assertIn("If the original run has stopped or its node is down", message)
             self.assertIn(f"rm -- {shlex.quote(str(self.lock))}", message)
             self.assertEqual(json.loads(self.lock.read_text()), owner)
         self.assertFalse(self.lock.exists())
 
     def test_partial_owner_file_still_blocks_launch(self):
         self.lock.write_text('{"host":')
-        with self.assertRaisesRegex(SystemExit, "owner information unavailable"), \
+        with self.assertRaisesRegex(LockHeld, "owner information unavailable"), \
              launch_lock(self.lock, "/project"):
             self.fail("incomplete lock was ignored")
         self.assertTrue(self.lock.exists())
@@ -238,14 +246,13 @@ with launch_lock(Path(sys.argv[1]), '/project'):
                 # Wait for the child to acquire ownership, without a timing race.
                 self.assertTrue(select.select([child.stdout], [], [], 5)[0])
                 self.assertEqual(child.stdout.readline(), "locked\n")
-                with self.assertRaisesRegex(SystemExit, "already locked"), \
-                     launch_lock(self.lock, "/project"):
+                with self.assertRaises(LockHeld), launch_lock(self.lock, "/project"):
                     self.fail("another process already owns this lock")
                 child.send_signal(signal.SIGKILL)
                 child.wait(timeout=5)
-                with self.assertRaisesRegex(SystemExit, "node is down"), \
-                     launch_lock(self.lock, "/project"):
+                with self.assertRaises(LockHeld) as stale, launch_lock(self.lock, "/project"):
                     self.fail("stale lock was automatically broken")
+                self.assertIn("node is down", str(lock_held_exit(stale.exception)))
             finally:
                 if child.poll() is None:
                     child.kill()
