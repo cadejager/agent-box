@@ -146,6 +146,27 @@ class Merge(unittest.TestCase):
         store.merge_credentials(master, exported)
         self.assertEqual(json.dumps([master, exported]), snapshot)
 
+    def test_duplicate_id_in_one_export_keeps_one_entry_with_the_last_value(self):
+        exported = [cred("a", active=True, key="first"), cred("a", key="second")]
+        merged = store.merge_credentials([], exported)
+        # One entry, the later value wins; the first occurrence marked it active.
+        self.assertEqual(merged, [cred("a", active=True, key="second")])
+
+    def test_master_entry_without_active_is_treated_as_inactive(self):
+        no_flag = {k: v for k, v in cred("a", key="old").items() if k != "active"}
+        untouched = {k: v for k, v in cred("b", "anthropic").items() if k != "active"}
+        merged = store.merge_credentials([no_flag, untouched], [cred("a", key="new")])
+        # Replacing it writes an explicit False; an entry the export doesn't
+        # mention is left exactly as it was.
+        self.assertEqual(merged, [cred("a", active=False, key="new"), untouched])
+
+    def test_credential_moving_to_another_integration(self):
+        master = [cred("a", "openai", active=True), cred("b", "openai")]
+        merged = store.merge_credentials(master, [cred("a", "anthropic", active=True)])
+        # `a` now belongs to anthropic and is its active credential; openai's
+        # remaining flags are untouched by an export that has no openai entry.
+        self.assertEqual(merged, [cred("a", "anthropic", active=True), cred("b", "openai")])
+
 
 if __name__ == "__main__":
     unittest.main()

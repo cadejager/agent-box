@@ -2,6 +2,7 @@ import os
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from agtbox import core
 from agtbox.sandboxes.base import Sandbox
@@ -93,6 +94,32 @@ class Podman(Sandbox):
         pd += ["-v", f"{ctx.app_dir}:{ctx.app_dir}", "-w", ctx.app_dir]
         pd += self.bind_args(ctx)
         return ["podman", *pd, "--", core.IMAGE, *(cmd or self.command(ctx))]
+
+    def capture_argv(self, ctx, cmd):
+        # A unique name so a timeout can remove the container: killing the podman
+        # client leaves conmon running it, and the command is PID 1, which
+        # ignores the SIGTERM podman would forward.
+        argv = self.build_run_argv(ctx, cmd, tty=False)
+        return argv[:2] + ["--name", f"agtbox-capture-{uuid.uuid4().hex[:16]}"] + argv[2:]
+
+    def cleanup_after_timeout(self, argv):
+        name = argv[argv.index("--name") + 1]
+        # --time 0 kills at once instead of waiting 10 s for a SIGTERM PID 1
+        # ignores; --ignore because the client may have died before creating it.
+        try:
+            rm = subprocess.run(["podman", "rm", "--force", "--ignore", "--time", "0", name],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                text=True, timeout=30)
+            if rm.returncode == 0:
+                return
+            reason = (rm.stderr or "").strip() or f"exit {rm.returncode}"
+        except (OSError, subprocess.TimeoutExpired) as e:
+            reason = str(e)
+        try:
+            print(f"Agent Box: warning: couldn't remove timed-out container {name} "
+                  f"({reason}); run `podman rm -f {name}`.", file=sys.stderr)
+        except OSError:
+            pass
 
     def _toolchain_mounts(self):
         # The rw toolchain + cache binds, shared by run and install so they can't drift.

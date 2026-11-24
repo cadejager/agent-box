@@ -134,15 +134,25 @@ class Sandbox(ABC):
                     active.detach()
         return code if code >= 0 else 128 - code
 
+    def capture_argv(self, ctx, cmd):
+        """argv for a captured command; a sandbox may add what its timeout
+        cleanup needs (podman names the container)."""
+        return self.build_run_argv(ctx, cmd, tty=False)
+
+    def cleanup_after_timeout(self, argv):
+        """Stop whatever of a timed-out capture outlived its killed session.
+        Returns only once it is gone (or gave up with a warning). Nothing by
+        default: bwrap's --die-with-parent takes the sandbox down with it."""
+
     def capture(self, ctx, cmd, stdin=None, timeout=None, guard=None):
         """Run `cmd` in the sandbox without a TTY; return (returncode, stdout).
 
         `stdin` (str) is piped in, else /dev/null; stderr passes through. The child
         gets its own session so terminal Ctrl-C cannot interrupt it; with `guard`,
         SIGTERM/SIGHUP received while it runs are forwarded to it. A timeout kills
-        it and returns (CAPTURE_TIMEOUT_CODE, "").
+        it, runs `cleanup_after_timeout`, and returns (CAPTURE_TIMEOUT_CODE, "").
         """
-        argv = self.build_run_argv(ctx, cmd, tty=False)
+        argv = self.capture_argv(ctx, cmd)
         with subprocess.Popen(argv, encoding="utf-8", errors="replace",
                               start_new_session=True,
                               stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
@@ -163,6 +173,7 @@ class Sandbox(ABC):
                     child.communicate(timeout=5)
                 except subprocess.TimeoutExpired:
                     pass  # something outside the session still holds the pipe; give up
+                self.cleanup_after_timeout(argv)
                 return CAPTURE_TIMEOUT_CODE, ""
             finally:
                 if guard is not None:
