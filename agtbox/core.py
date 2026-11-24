@@ -101,7 +101,7 @@ SHARED_BINDS = [
 def ensure_sources(binds):
     """Create host-side bind sources so a fresh user can launch. `binds` is the
     full merged list (shared + agent). dir/file -> create the dir; file -> seed
-    '{}' if absent; seed -> create an empty file inside its (already-created) dir.
+    '{}' if absent; ro -> must already exist (else exit with a clear error); seed -> create an empty file inside its (already-created) dir.
     NB: synthetic passwd/group identity files are NOT generated here -- they are a
     bwrap-only concern, generated in Bwrap.prepare."""
     for d in (AGENT_TOOLS, f"{AGENT_CACHE}/npm", f"{AGENT_CACHE}/pip", f"{AGENT_CACHE}/uv"):
@@ -114,6 +114,11 @@ def ensure_sources(binds):
             if not os.path.exists(b.src):
                 with open(b.src, "w") as fh:
                     fh.write("{}")
+        elif b.kind == "ro":
+            if not os.path.exists(b.src):
+                print(f"Error: bundled read-only bind source is missing: {b.src}",
+                      file=sys.stderr)
+                sys.exit(1)
         elif b.kind == "seed":
             os.makedirs(os.path.dirname(b.src), exist_ok=True)
             if not os.path.exists(b.src):

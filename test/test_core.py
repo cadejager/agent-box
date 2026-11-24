@@ -132,3 +132,46 @@ class EnsureSources(_HomeCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AgentEnv(unittest.TestCase):
+    def test_pip_prefix_absent_and_uv_python_dirs_present(self):
+        keys = [e.partition("=")[0] for e in _canon_core.AGENT_ENV]
+        self.assertNotIn("PIP_PREFIX", keys)   # it overrides venvs
+        self.assertIn("PYTHONUSERBASE", keys)
+        env = dict(e.partition("=")[::2] for e in _canon_core.AGENT_ENV)
+        self.assertEqual(env["UV_PYTHON_INSTALL_DIR"], f"{_canon_core.AGENT_TOOLS}/uv/python")
+        self.assertEqual(env["UV_PYTHON_BIN_DIR"], f"{_canon_core.AGENT_TOOLS}/bin")
+
+
+class SkillBind(_HomeCase):
+    def test_skill_bind_shape_and_source_exists(self):
+        b = _canon_core.skill_bind("/h/.claude/skills")
+        self.assertEqual((b.dst, b.kind), ("/h/.claude/skills/agent-box", "ro"))
+        self.assertEqual(b.src, _canon_core.SKILL_SRC)
+        self.assertTrue(os.path.isfile(os.path.join(b.src, "SKILL.md")))
+
+    def test_skill_frontmatter_matches_name_and_has_no_bare_colon(self):
+        text = Path(_canon_core.SKILL_SRC, "SKILL.md").read_text()
+        front = text.split("---")[1]
+        self.assertIn(f"name: {_canon_core.SKILL_NAME}\n", front)
+        desc = [l for l in front.splitlines() if l.startswith("description:")][0]
+        # an unquoted ": " inside a plain YAML scalar is a parse error
+        self.assertNotIn(": ", desc[len("description:"):].replace('"', ""))
+
+    def test_ensure_sources_ro_existing_is_left_alone_missing_exits(self):
+        home = self._home()
+        c = fresh_core(home)
+        src = home / "skill"
+        src.mkdir()
+        c.ensure_sources([c.Bind(str(src), "/x", "ro"), *c.SHARED_BINDS])
+        self.assertEqual(list(src.iterdir()), [])          # not seeded or modified
+        with self.assertRaises(SystemExit):
+            c.ensure_sources([c.Bind(str(home / "nope"), "/y", "ro"), *c.SHARED_BINDS])
+        self.assertFalse((home / "nope").exists())          # and not created
+
+    def test_ensure_sources_creates_arch_cache_dir(self):
+        home = self._home()
+        c = fresh_core(home)
+        c.ensure_sources([c.Bind(f"{c.AGENT_CACHE}/{c.ARCH}/opencode", "/x"), *c.SHARED_BINDS])
+        self.assertTrue((Path(c.AGENT_CACHE) / c.ARCH / "opencode").is_dir())

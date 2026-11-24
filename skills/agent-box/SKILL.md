@@ -5,7 +5,7 @@ description: Read this before saying a tool, CLI, library or language version is
 
 # Agent Box sandbox
 
-You are in an unprivileged sandbox. The system (`/usr`, `/etc`, …) is **read-only** and `$HOME` and `/tmp` are **private tmpfs** that vanish when the session ends. There is no root, `sudo` or `apt`. You can still get nearly any tool with the per-user toolchain below, so don't tell the user something is unavailable until you've tried it.
+You are in an unprivileged sandbox. Changes to the system (`/usr`, `/etc`, …), `$HOME` and `/tmp` are **thrown away when the session ends**, and there is no root, `sudo` or `apt` to rely on. Only the project directory and the toolchain below persist. You can still get nearly any tool with the per-user toolchain below, so don't tell the user something is unavailable until you've tried it.
 
 ## Before saying a tool is missing, try in this order
 1. `command -v X`
@@ -29,7 +29,7 @@ Network is available. Proxy settings are forwarded only if the user's host had t
 - Project: `uv sync` (uv project), or `uv venv && uv pip install -r requirements.txt`
 - One script: `uv run --with requests script.py`, or store deps in the script: `uv add --script script.py requests && uv run script.py`
 - Other Python versions: `uv python install 3.12`, then `uv run --python 3.12 …`, `uv venv --python 3.12`, or just `python3.12` (it lands on PATH). `uv python list` shows what's available.
-- `python -m venv` + `pip` works where the host's Python has pip/venv, but it may not (esp. podman) — uv always works. A bare `pip install` is a persistent user install and only affects the Python that pip belongs to (`pip --version`).
+- `python -m venv` + `pip` works where the host's Python has pip/venv, but it may not (esp. podman) — uv always works. Bare `pip install` may fail (read-only system Python) or be discarded; if you use pip, use a venv or `pip install --user`, and prefer `uv` / `uv tool` so installs persist.
 - Node projects: plain `npm install` (`node_modules` stays in the project).
 
 ## What persists
