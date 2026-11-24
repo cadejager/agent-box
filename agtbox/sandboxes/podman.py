@@ -79,12 +79,15 @@ class Podman(Sandbox):
         except OSError:
             pass
 
-    def build_run_argv(self, ctx, cmd=None):
+    def build_run_argv(self, ctx, cmd=None, tty=None):
         # -t (allocate a TTY) only when actually attached to one, so an interactive
         # TUI works in a real terminal AND `agtbox bash -- -c ...` works in a pipe/CI
         # (podman -it in a non-TTY dies "the input device is not a TTY"). -i always.
-        tty = ["-t"] if sys.stdin.isatty() and sys.stdout.isatty() else []
-        pd = ["run", "-i", *tty, "--rm", "--security-opt", "label=disable"]
+        # tty=False forces no TTY: captured commands pipe stdin/stdout, and a TTY
+        # would merge stderr into stdout and turn newlines into CRLF.
+        if tty is None:
+            tty = sys.stdin.isatty() and sys.stdout.isatty()
+        pd = ["run", "-i", *(["-t"] if tty else []), "--rm", "--security-opt", "label=disable"]
         pd += self.env_args(ctx)
         pd += self._toolchain_mounts()
         pd += ["-v", f"{ctx.app_dir}:{ctx.app_dir}", "-w", ctx.app_dir]

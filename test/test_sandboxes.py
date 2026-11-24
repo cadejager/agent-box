@@ -1,7 +1,11 @@
 import os
+import select
 import shutil
 import signal
+import subprocess
+import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -9,6 +13,7 @@ from unittest import mock
 from unittest.mock import mock_open
 
 import agtbox.core
+import agtbox.sandboxes.base as sandbox_base
 from agtbox.context import RunContext
 from agtbox.sandboxes.base import Sandbox
 
@@ -23,7 +28,8 @@ class FakeSandbox(Sandbox):
         return [f"E:{k}={v}" for k, v in pairs]
     def fmt_bind(self, src, dst, ro):
         return [f"B:{src}>{dst}{':ro' if ro else ''}"]
-    def build_run_argv(self, ctx, cmd=None):
+    def build_run_argv(self, ctx, cmd=None, tty=None):
+        self.last_tty = tty
         return ["fake", *self.bind_args(ctx), *(cmd or self.command(ctx))]
     def install_machine(self):
         return "x86_64"
@@ -142,6 +148,122 @@ class Wait(unittest.TestCase):
         self.assertEqual([signal.getsignal(s) for s in signals], before)
 
 
+class ScriptSandbox(FakeSandbox):
+    """Runs a Python snippet instead of a real sandbox."""
+    def __init__(self, script):
+        self.script = script
+        self.last_tty = "unset"
+
+    def build_run_argv(self, ctx, cmd=None, tty=None):
+        self.last_tty = tty
+        return [sys.executable, "-c", self.script]
+
+
+class Capture(unittest.TestCase):
+    def test_capture_pipes_stdin_and_returns_stdout_without_tty(self):
+        sandbox = ScriptSandbox("import sys; print(sys.stdin.read().upper(), end='')")
+        self.assertEqual(sandbox.capture(None, ["x"], stdin="hello"), (0, "HELLO"))
+        self.assertIs(sandbox.last_tty, False)
+
+    def test_capture_without_stdin_reads_devnull(self):
+        sandbox = ScriptSandbox("import sys; print(repr(sys.stdin.read()), end='')")
+        self.assertEqual(sandbox.capture(None, ["x"]), (0, "''"))
+
+    def test_capture_reports_nonzero_exit(self):
+        sandbox = ScriptSandbox("import sys; print('partial'); sys.exit(3)")
+        self.assertEqual(sandbox.capture(None, ["x"]), (3, "partial\n"))
+
+    def test_capture_timeout_kills_child(self):
+        sandbox = ScriptSandbox("import time; time.sleep(30)")
+        start = time.monotonic()
+        self.assertEqual(sandbox.capture(None, ["x"], timeout=0.5), (124, ""))
+        self.assertLess(time.monotonic() - start, 10)
+
+    def test_capture_runs_in_its_own_session(self):
+        sandbox = ScriptSandbox("import os; print(os.getsid(0) == os.getpid(), end='')")
+        self.assertEqual(sandbox.capture(None, ["x"]), (0, "True"))
+
+
+class Guard(unittest.TestCase):
+    def test_pending_signals_go_only_to_a_child_that_takes_them(self):
+        guard = sandbox_base.SignalGuard()
+        guard._forward(signal.SIGTERM, None)          # no child attached: recorded
+        self.assertEqual(guard.pending, [signal.SIGTERM])
+        capture_child = mock.Mock()
+        guard.attach(capture_child, deliver_pending=False)
+        capture_child.send_signal.assert_not_called()  # earlier signals stay for the agent
+        guard._forward(signal.SIGHUP, None)           # forwarded AND kept for the agent
+        capture_child.send_signal.assert_called_once_with(signal.SIGHUP)
+        self.assertEqual(guard.pending, [signal.SIGTERM, signal.SIGHUP])
+        guard.detach()
+        agent = mock.Mock()
+        guard.attach(agent, deliver_pending=True)
+        self.assertEqual(agent.send_signal.call_args_list,
+                         [mock.call(signal.SIGTERM), mock.call(signal.SIGHUP)])
+        self.assertEqual(guard.pending, [])
+        guard._forward(signal.SIGTERM, None)          # to the agent only, not recorded
+        self.assertEqual(agent.send_signal.call_count, 3)
+        self.assertEqual(guard.pending, [])
+
+    def test_wait_uses_callers_guard_without_restoring_handlers(self):
+        child = mock.MagicMock()
+        child.__enter__.return_value = child
+        child.wait.return_value = 0
+        guard = mock.Mock()
+        with mock.patch("agtbox.sandboxes.base.subprocess.Popen", return_value=child), \
+             mock.patch("agtbox.sandboxes.base.signal.signal") as install, \
+             mock.patch.object(FakeSandbox, "build_run_argv", return_value=["fake"]):
+            self.assertEqual(FakeSandbox().wait(None, guard=guard), 0)
+        install.assert_not_called()
+        guard.attach.assert_called_once_with(child, deliver_pending=True)
+        guard.detach.assert_called_once_with()
+
+    def _launcher(self, signal_to_send):
+        script = """
+import sys
+from agtbox.sandboxes.base import SignalGuard
+from agtbox.sandboxes.bwrap import Bwrap
+child = '''
+import sys, time
+print("ready", file=sys.stderr, flush=True)
+time.sleep(1)
+print("done")
+'''
+sandbox = Bwrap()
+sandbox.build_run_argv = lambda ctx, cmd=None, tty=None: [sys.executable, "-c", child]
+with SignalGuard() as guard:
+    code, out = sandbox.capture(None, ["x"], timeout=10, guard=guard)
+print(code, out.strip(), flush=True)
+"""
+        with subprocess.Popen([sys.executable, "-c", script],
+                              cwd=Path(__file__).resolve().parents[1],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, start_new_session=True) as launcher:
+            try:
+                self.assertTrue(select.select([launcher.stderr], [], [], 5)[0])
+                self.assertEqual(launcher.stderr.readline(), "ready\n")
+                if signal_to_send == signal.SIGINT:
+                    os.killpg(launcher.pid, signal.SIGINT)   # what terminal Ctrl-C does
+                else:
+                    launcher.send_signal(signal_to_send)
+                out, err = launcher.communicate(timeout=10)
+                return launcher.returncode, out, err
+            finally:
+                if launcher.poll() is None:
+                    launcher.kill()
+                    launcher.wait(timeout=5)
+
+    def test_ctrl_c_during_capture_does_not_interrupt_it(self):
+        code, out, err = self._launcher(signal.SIGINT)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, "0 done\n")
+
+    def test_sigterm_during_capture_stops_child_not_launcher(self):
+        code, out, err = self._launcher(signal.SIGTERM)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.split()[0], str(-signal.SIGTERM))
+
+
 class BwrapArgv(unittest.TestCase):
     def _ctx(self):
         from agtbox.agents.claude import Claude
@@ -152,6 +274,11 @@ class BwrapArgv(unittest.TestCase):
                           env=[("HOME", "/h"), ("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "1")],
                           app_dir="/app", volumes=[], ro_volumes=["/ro"],
                           extra_args=["--resume"])
+
+    def test_tty_argument_is_accepted_and_ignored(self):
+        from agtbox.sandboxes.bwrap import Bwrap
+        self.assertEqual(Bwrap().build_run_argv(self._ctx(), ["X"], tty=False),
+                         Bwrap().build_run_argv(self._ctx(), ["X"]))
 
     def test_run_argv_locked_down(self):
         from agtbox.sandboxes.bwrap import Bwrap
@@ -203,6 +330,16 @@ class BwrapArgv(unittest.TestCase):
 
 
 class PodmanArgv(unittest.TestCase):
+    def test_tty_false_never_allocates_a_tty(self):
+        from unittest import mock
+
+        from agtbox.sandboxes.podman import Podman
+        with mock.patch("agtbox.sandboxes.podman.sys.stdin.isatty", return_value=True), \
+             mock.patch("agtbox.sandboxes.podman.sys.stdout.isatty", return_value=True):
+            argv = Podman().build_run_argv(self._ctx(), ["X"], tty=False)
+        self.assertNotIn("-t", argv)
+        self.assertIn("-i", argv)
+
     def _ctx(self):
         from agtbox.agents.opencode import Opencode
         from agtbox.context import RunContext
