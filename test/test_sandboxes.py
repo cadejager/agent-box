@@ -179,6 +179,28 @@ class Capture(unittest.TestCase):
         self.assertEqual(sandbox.capture(None, ["x"], timeout=0.5), (124, ""))
         self.assertLess(time.monotonic() - start, 10)
 
+    def test_capture_timeout_does_not_wait_for_pipe_held_outside_session(self):
+        pidfile = tempfile.mktemp()
+        script = (
+            "import subprocess, sys, time\n"
+            "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],"
+            " start_new_session=True)\n"
+            f"open({pidfile!r}, 'w').write(str(g.pid))\n"
+            "time.sleep(30)\n")
+
+        def cleanup():
+            try:
+                os.kill(int(Path(pidfile).read_text()), signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
+            if os.path.exists(pidfile):
+                os.unlink(pidfile)
+        self.addCleanup(cleanup)
+        sandbox = ScriptSandbox(script)
+        start = time.monotonic()
+        self.assertEqual(sandbox.capture(None, ["x"], timeout=1), (124, ""))
+        self.assertLess(time.monotonic() - start, 10)
+
     def test_capture_runs_in_its_own_session(self):
         sandbox = ScriptSandbox("import os; print(os.getsid(0) == os.getpid(), end='')")
         self.assertEqual(sandbox.capture(None, ["x"]), (0, "True"))

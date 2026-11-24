@@ -141,8 +141,17 @@ class Sandbox(ABC):
             try:
                 out, _ = child.communicate(stdin, timeout=timeout)
             except subprocess.TimeoutExpired:
+                # Kill the whole session (the child leads its own): under podman
+                # the client is only one of several processes holding the pipe.
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 child.kill()
-                child.communicate()
+                try:
+                    child.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass  # something outside the session still holds the pipe; give up
                 return CAPTURE_TIMEOUT_CODE, ""
             finally:
                 if guard is not None:
