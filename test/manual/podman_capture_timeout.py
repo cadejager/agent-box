@@ -15,6 +15,8 @@ four ways and reports whether the container kept running:
   C  B + --init:    same, with `podman run --init` (the command is not PID 1, so
                     it doesn't ignore SIGTERM the way PID 1 does)
   D  by name:       SIGKILL the client, then `podman rm -f <name>`
+  E  the fix:       Sandbox.capture(timeout=3) with podman's own timeout cleanup
+                    (a named container removed with `podman rm --force --time 0`)
 
 Run on a host where podman works (not inside Agent Box), from the repo root:
     python3 test/manual/podman_capture_timeout.py
@@ -94,6 +96,24 @@ def scenario_capture(ctx, work, name):
     return heartbeat, f"capture returned {code} after {took:.1f}s"
 
 
+def scenario_fixed(ctx, work, names):
+    """E: the real capture, whose podman cleanup names and removes the container."""
+    sandbox = Podman()
+    original = sandbox.capture_argv
+
+    def capture_argv(ctx, cmd):
+        argv = original(ctx, cmd)
+        names["E"] = argv[argv.index("--name") + 1]
+        return argv
+
+    sandbox.capture_argv = capture_argv
+    heartbeat = work / "fixed.beat"
+    start = time.time()
+    code, _ = sandbox.capture(ctx, ["sh", "-c", LOOP, "sh", str(heartbeat)], timeout=TIMEOUT)
+    took = time.time() - start
+    return heartbeat, f"capture returned {code} after {took:.1f}s"
+
+
 def scenario_signal(ctx, work, name, sig, init=False, remove=False):
     """B/C/D: start the same command, then stop it the way a fix would."""
     heartbeat = work / f"{name}.beat"
@@ -139,6 +159,8 @@ def main():
               lambda: scenario_signal(ctx, work, names["C"], signal.SIGTERM, init=True)),
         "D": ("SIGKILL client session, then podman rm -f <name>",
               lambda: scenario_signal(ctx, work, names["D"], signal.SIGKILL, remove=True)),
+        "E": ("the fix: capture timeout with podman's timeout cleanup",
+              lambda: scenario_fixed(ctx, work, names)),
     }
     results = {}
     try:
@@ -157,6 +179,9 @@ def main():
         shutil.rmtree(work, ignore_errors=True)
 
     print()
+    if "E" in results:
+        print("FIX " + ("FAILED: the container outlived the fixed capture's timeout."
+                        if results["E"] else "WORKS: the fixed capture's timeout stops the container."))
     if results.get("A"):
         print("PROBLEM CONFIRMED: after capture's timeout the container keeps running, "
               "so a failed seed's DB delete can race a still-running import.")

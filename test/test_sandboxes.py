@@ -233,6 +233,25 @@ class Capture(unittest.TestCase):
         sandbox = ScriptSandbox("import os; print(os.getsid(0) == os.getpid(), end='')")
         self.assertEqual(sandbox.capture(None, ["x"]), (0, "True"))
 
+    def test_capture_uses_capture_argv(self):
+        sandbox = ScriptSandbox("print('real', end='')")
+        sandbox.capture_argv = lambda ctx, cmd: [sys.executable, "-c", "print('hook', end='')"]
+        self.assertEqual(sandbox.capture(None, ["x"]), (0, "hook"))
+
+    def test_timeout_runs_the_sandbox_cleanup_with_the_argv(self):
+        sandbox = ScriptSandbox("import time; time.sleep(30)")
+        seen = []
+        sandbox.cleanup_after_timeout = seen.append
+        self.assertEqual(sandbox.capture(None, ["x"], timeout=0.5), (124, ""))
+        self.assertEqual(seen, [[sys.executable, "-c", "import time; time.sleep(30)"]])
+
+    def test_no_cleanup_when_the_command_finishes(self):
+        sandbox = ScriptSandbox("import sys; sys.exit(2)")
+        seen = []
+        sandbox.cleanup_after_timeout = seen.append
+        self.assertEqual(sandbox.capture(None, ["x"], timeout=10), (2, ""))
+        self.assertEqual(seen, [])
+
 
 class Guard(unittest.TestCase):
     def test_pending_signals_go_only_to_a_child_that_takes_them(self):
@@ -481,6 +500,57 @@ class PodmanArgv(unittest.TestCase):
             argv = Podman().build_run_argv(self._ctx())
         self.assertNotIn("-t", argv)
         self.assertIn("-i", argv)
+
+    def test_capture_containers_get_a_unique_name(self):
+        from agtbox.sandboxes.podman import Podman
+        sandbox = Podman()
+        first = sandbox.capture_argv(self._ctx(), ["X"])
+        second = sandbox.capture_argv(self._ctx(), ["X"])
+        self.assertEqual(first[:2], ["podman", "run"])
+        name = first[first.index("--name") + 1]
+        self.assertRegex(name, r"^agtbox-capture-[0-9a-f]{16}$")
+        self.assertLess(first.index("--name"), first.index("--"))
+        self.assertNotEqual(name, second[second.index("--name") + 1])
+        self.assertNotIn("-t", first)
+        self.assertEqual(first[-2:], ["agent-box", "X"])
+
+    def test_agent_runs_are_not_named(self):
+        from agtbox.sandboxes.podman import Podman
+        with mock.patch("agtbox.sandboxes.podman.sys.stdin.isatty", return_value=True), \
+             mock.patch("agtbox.sandboxes.podman.sys.stdout.isatty", return_value=True):
+            argv = Podman().build_run_argv(self._ctx())
+        self.assertNotIn("--name", argv)
+
+    def test_timeout_cleanup_removes_the_named_container(self):
+        from agtbox.sandboxes.podman import Podman
+        sandbox = Podman()
+        argv = sandbox.capture_argv(self._ctx(), ["X", "--name", "decoy"])
+        name = argv[argv.index("--name") + 1]
+        with mock.patch("agtbox.sandboxes.podman.subprocess.run",
+                        return_value=subprocess.CompletedProcess([], 0)) as run:
+            sandbox.cleanup_after_timeout(argv)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0],
+                         ["podman", "rm", "--force", "--ignore", "--time", "0", name])
+        self.assertIsNotNone(run.call_args.kwargs.get("timeout"))
+
+    def test_timeout_cleanup_failure_only_warns(self):
+        from agtbox.sandboxes.podman import Podman
+        sandbox = Podman()
+        argv = sandbox.capture_argv(self._ctx(), ["X"])
+        name = argv[argv.index("--name") + 1]
+        for effect in (subprocess.CompletedProcess([], 125, stderr="boom"),
+                       subprocess.TimeoutExpired(["podman"], 30),
+                       FileNotFoundError("podman")):
+            with self.subTest(effect=effect), \
+                 mock.patch("agtbox.sandboxes.podman.subprocess.run",
+                            **({"return_value": effect}
+                               if isinstance(effect, subprocess.CompletedProcess)
+                               else {"side_effect": effect})), \
+                 mock.patch("sys.stderr") as err:
+                sandbox.cleanup_after_timeout(argv)
+            written = "".join(c.args[0] for c in err.write.call_args_list)
+            self.assertIn(f"podman rm -f {name}", written)
 
     def test_derive_tz_appends_to_ctx_env(self):
         from unittest import mock
