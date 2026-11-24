@@ -64,45 +64,60 @@ Session handling is just each agent's native syntax, after `--`: claude `--conti
 
 opencode is **v2**, launched `--standalone` (a private server per run) with its shared background service disabled. Upgrading from v1: `./bin/agtbox.py -u opencode`. V1 plugins don't run under v2 — port them in your opencode config (`~/.config/agent-box/opencode`), which also gains a `service.json` to commit or gitignore.
 
-OpenCode keeps its existing **shared database, logins, config, state, cache, and
-software environment**. The database remains under
-`~/.local/share/agent-box/<arch>/opencode/`, mounted as
-`~/.local/share/opencode` inside each sandbox. There is no per-project database,
-credential import, or history migration. Existing database/WAL files are left
-intact; the host's `OPENCODE_DB` is not forwarded. `-a` still sets the sandbox's
-working directory and primary writable project mount, even when launched from a
-subdirectory. Standalone execution keeps project filesystem access scoped to that
-sandbox's mounts.
+OpenCode shares its **config, state, cache, and software environment** across
+projects. Its data lives under `~/.local/share/agent-box/<arch>/opencode/`,
+mounted as `~/.local/share/opencode` inside each sandbox. The host's
+`OPENCODE_DB` is not forwarded. `-a` still sets the sandbox's working directory
+and primary writable project mount, even when launched from a subdirectory.
 
-When the OpenCode **data directory is on a network filesystem** (NFS, Lustre,
-GPFS, CIFS/SMB, Ceph), Agent Box allows only **one
-OpenCode launch at a time across all projects and front ends sharing its database**.
-It uses this global lock:
+**On local disks** nothing changes: every project uses the one shared
+`opencode.db` and launches run concurrently.
+
+**When the data directory is on a network filesystem** (NFS, Lustre, GPFS,
+CIFS/SMB, Ceph), or when detection fails (with a warning), each project gets its
+own database and lock, so different projects run at the same time from any host:
 
 ```
-~/.local/share/agent-box/opencode-<arch>.launch.lock
+~/.local/share/agent-box/<arch>/opencode/projects/<name>-<hash>.db    # the project's database
+~/.local/share/agent-box/<arch>/opencode/projects/<name>-<hash>.path  # which project it belongs to
+~/.local/share/agent-box/<arch>/opencode/projects/<name>-<hash>.lock  # held while it runs
 ```
 
-Detection checks the data directory's backing filesystem on the launcher host
-(`stat -f` on Linux; the mount table on macOS), including symlink targets. If
-detection fails, the launcher prints a warning and uses the lock. Other
-storage keeps the ordinary concurrent-launch behavior. This is a cooperative lock:
-OpenCode launched outside the updated harness does not participate.
+`<name>` is the project directory's name and `<hash>` comes from its real path on
+the launching node. Moving or renaming a project starts a fresh database (the old
+one stays); a project reached through different mount paths on different nodes
+gets different databases. The old shared `opencode.db` is left untouched; its
+history is still readable on a local-disk host or with `AGTBOX_OPENCODE_NETFS=0`.
 
-The lock covers setup and the sandbox's lifetime. A blocked launch prints the
-owner's host, launcher PID, start time, project, and an exact `rm -- .../opencode-<arch>.launch.lock`
-recovery command. Normal exit or a handled termination removes the lock. A killed
-launcher or crashed host can leave it behind: remove it only after confirming the
-original run has stopped or its node is down. Locks are never broken automatically
-based on age or a PID check on a different host.
+A second launch of the **same project** is refused with the owner's host,
+launcher PID, start time, project, and an exact `rm -- …/<name>-<hash>.lock`
+recovery command. A killed launcher or crashed host can leave the lock behind:
+remove it only after confirming the original run has stopped or its node is down.
+Locks are never broken automatically. The lock is cooperative (OpenCode run
+outside Agent Box ignores it) and it doesn't make SQLite's
+[WAL mode network-safe](https://sqlite.org/wal.html); it only keeps two Agent Box
+launches off one database.
 
-Session history and logins persist across restarts and front ends that share the
-same home **and architecture-specific data directory**. The existing layout does
-not merge OpenCode databases between CPU architectures. No temporary database,
-local staging, or synchronization is introduced. Serializing launches reduces
-concurrent database access; it does **not** fix SQLite's underlying
-[WAL limitations on network filesystems](https://sqlite.org/wal.html). NFS-related
-hangs or locking errors may still need further work.
+**Logins carry over to new projects.** When a session ends, Agent Box copies its
+stored credentials into `~/.local/share/agent-box/opencode/credentials.json`
+(private to you, shared by every CPU architecture, invisible to agents). A
+project's *first* launch starts with those credentials. Log in once in any
+project and every new project after it is authenticated. Limits:
+
+- Projects that already have a database don't pick up later logins; log in there
+  too if a key changes.
+- If copying the credentials into a new project fails, Agent Box warns and that
+  project starts without them (it isn't retried); log in there once.
+- Logging out in one project doesn't remove the credential from the master.
+- An old project with an outdated key can overwrite a newer one in the master
+  when it exits; log in again to fix it.
+- If two projects finish at the same moment, one of them warns that its changes
+  weren't saved to the master (its own database still has them).
+- Sign-in (OAuth) logins are copied too, but their refresh tokens rotate, so
+  copies in other projects can go stale.
+
+Set `AGTBOX_OPENCODE_NETFS=1` to use per-project databases on a local disk (for
+testing), or `0` to force the shared database.
 
 `./bin/agtbox.py -u claude` updates the toolchain and claude's npm package in place, then runs. Run with `-u` any time you want to pull the latest agent CLIs.
 
