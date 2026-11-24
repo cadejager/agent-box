@@ -47,7 +47,7 @@
 
 In `test/test_opencode.py`:
 
-Change the imports:
+Change the top-level imports at the head of the file (not the copies of `from agtbox.locking import …` inside the subprocess script strings further down):
 
 ```python
 from agtbox.agents.opencode import NETWORK_FSTYPES, Opencode, lock_held_exit
@@ -165,7 +165,7 @@ In `agtbox/agents/opencode.py`, add `import shlex`, import `LockHeld` (`from agt
 
 ```python
 def lock_held_exit(err):
-    """The project-lock contention message (unchanged from the global lock)."""
+    """The project-lock contention message; its wording is kept stable."""
     return SystemExit(
         "Agent Box: OpenCode is already locked by another launch.\n"
         f"Owner: {err.details}\nLock file: {err.path}\n"
@@ -273,13 +273,18 @@ class Guard(unittest.TestCase):
         self.assertEqual(guard.pending, [signal.SIGTERM])
         capture_child = mock.Mock()
         guard.attach(capture_child, deliver_pending=False)
-        capture_child.send_signal.assert_not_called()
-        guard._forward(signal.SIGHUP, None)           # attached: forwarded
+        capture_child.send_signal.assert_not_called()  # earlier signals stay for the agent
+        guard._forward(signal.SIGHUP, None)           # forwarded AND kept for the agent
         capture_child.send_signal.assert_called_once_with(signal.SIGHUP)
+        self.assertEqual(guard.pending, [signal.SIGTERM, signal.SIGHUP])
         guard.detach()
         agent = mock.Mock()
         guard.attach(agent, deliver_pending=True)
-        agent.send_signal.assert_called_once_with(signal.SIGTERM)
+        self.assertEqual(agent.send_signal.call_args_list,
+                         [mock.call(signal.SIGTERM), mock.call(signal.SIGHUP)])
+        self.assertEqual(guard.pending, [])
+        guard._forward(signal.SIGTERM, None)          # to the agent only, not recorded
+        self.assertEqual(agent.send_signal.call_count, 3)
         self.assertEqual(guard.pending, [])
 
     def test_wait_uses_callers_guard_without_restoring_handlers(self):
@@ -383,9 +388,11 @@ class SignalGuard:
     """The launcher's signal handling for a sandbox lifetime that spans several
     children (setup, credential commands, the agent).
 
-    SIGTERM/SIGHUP go to the attached child. With none attached they are recorded
-    in `pending` and delivered to the next child attached with deliver_pending=True
-    (the agent); credential commands never receive signals sent before they ran.
+    SIGTERM/SIGHUP go to the attached child. Unless that child is the agent
+    (attached with deliver_pending=True) they are also recorded in `pending`, and
+    the agent receives every recorded signal when it is attached: a SIGTERM that
+    stops setup or a credential command must still stop the agent that would
+    start next. Credential commands never receive signals sent before they ran.
     A terminal hangup can signal only the launcher as session leader, so SIGHUP
     must be forwarded. SIGINT runs a Python no-op: terminal Ctrl-C already reaches
     the foreground process group, and unlike SIG_IGN a Python handler resets on
@@ -395,13 +402,14 @@ class SignalGuard:
     def __init__(self):
         self.child = None
         self.pending = []
+        self._child_is_agent = False
         self._previous = {}
 
     def _forward(self, signum, frame):
-        if self.child is None:
-            self.pending.append(signum)
-        else:
+        if self.child is not None:
             self.child.send_signal(signum)
+        if self.child is None or not self._child_is_agent:
+            self.pending.append(signum)
 
     @staticmethod
     def _ignore(signum, frame):
@@ -420,6 +428,7 @@ class SignalGuard:
 
     def attach(self, child, deliver_pending):
         self.child = child
+        self._child_is_agent = deliver_pending
         if deliver_pending:
             pending, self.pending = self.pending, []
             for signum in pending:
@@ -427,6 +436,7 @@ class SignalGuard:
 
     def detach(self):
         self.child = None
+        self._child_is_agent = False
 ```
 
 Change the abstract signature:
@@ -543,7 +553,6 @@ Create `test/test_opencode_store.py`:
 import hashlib
 import json
 import os
-import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -835,8 +844,9 @@ git commit -m "opencode_store: project IDs and the master credential file"
 ### Task 4: Per-project database, lock, seed and push-back in `Opencode.run`
 
 **Files:**
-- Modify: `agtbox/agents/opencode.py` (rewrite `run`; add `warn`, `uses_network_path`, `_locked_run`, `_seed`, `_push_back`)
+- Modify: `agtbox/agents/opencode.py` (rewrite `run`; add `print_status`, `warn`, `uses_network_path`, `_locked_run`, `_seed`, `_push_back`)
 - Test: `test/test_opencode.py` (rewrite `SharedStorage`; add `NetworkLaunch` process test)
+- Test: `test/test_agtbox.py` (`LauncherTest._run`; the two `Tools.test_opencode_*` lock/storage tests, ~lines 80-90 and 235-275)
 
 **Interfaces:**
 - Consumes: `LockHeld`, `launch_lock`, `filesystem_type` (Task 1, `agtbox.locking`); `lock_held_exit` (Task 1); `SignalGuard`, `Sandbox.wait(ctx, guard=)`, `Sandbox.capture(ctx, cmd, stdin=, timeout=, guard=)` (Task 2); everything in `agtbox.opencode_store` (Task 3).
@@ -1073,19 +1083,37 @@ class SharedStorage(unittest.TestCase):
         self.assertNotIn("warning", err)
         self.assertFalse(self.files()[1].exists())
 
-    def test_failed_import_deletes_new_database_and_next_launch_retries(self):
+    def test_failed_import_deletes_its_files_before_the_agent_and_is_not_retried(self):
         store.write_master([CRED])
         _, db, _ = self.files()
-        sandbox = self.sandbox(import_code=1, creates_db=False)
+        sandbox = self.sandbox(import_code=1)
+        agent_saw = []
+        wait = sandbox.wait.side_effect
+
+        def record(ctx, guard=None):
+            agent_saw.extend(Path(f"{db}{s}").exists() for s in ("", "-wal", "-shm"))
+            return wait(ctx, guard)
+
+        sandbox.wait.side_effect = record
         code, err = self.launch(sandbox)
         self.assertEqual(code, 0)
-        self.assertIn("auth import", err)
-        for suffix in ("", "-wal", "-shm"):
-            self.assertFalse(Path(f"{db}{suffix}").exists(), suffix)
-        self.assertEqual(self.commands(sandbox), [["auth", "import"]])  # no DB, no export
-        retry = self.sandbox()
-        self.launch(retry)
-        self.assertEqual(self.commands(retry), [["auth", "import"], ["auth", "export"]])
+        self.assertEqual(agent_saw, [False, False, False])  # deleted before the agent ran
+        self.assertIn("`opencode auth import` failed", err)
+        self.assertIn("log in", err)
+        self.assertNotIn("tries again", err)
+        self.assertTrue(db.exists())                          # the agent made a fresh one
+        again = self.sandbox()
+        self.launch(again)
+        self.assertEqual(self.commands(again), [["auth", "export"]])  # not re-seeded
+
+    def test_credential_command_spawn_failure_warns_and_keeps_exit_status(self):
+        store.write_master([CRED])
+        sandbox = self.sandbox(agent_code=6)
+        sandbox.capture.side_effect = OSError("cannot start podman")
+        code, err = self.launch(sandbox)
+        self.assertEqual(code, 6)
+        self.assertEqual(err.count("cannot start podman"), 2)  # seed and push-back
+        self.assertEqual(store.read_master(), [CRED])
 
     def test_export_is_merged_into_master_after_nonzero_exit(self):
         code, _ = self.launch(self.sandbox(exported=json.dumps([CRED]), agent_code=3))
@@ -1246,10 +1274,75 @@ signal.pause()
             self.assertEqual(list((home / "tools/opencode/projects").glob("*.lock")), [])
 ```
 
+Then update the stub-launcher tests in `test/test_agtbox.py` (they run the real launcher as a subprocess against stubbed `bwrap`/`podman`, and today assert the old global lock).
+
+In `LauncherTest._run`, keep a leftover exported override from flipping these tests — insert right after `env["PYTHONPATH"] = str(REPO)`:
+
+```python
+        env.pop("AGTBOX_OPENCODE_NETFS", None)  # tests choose the path via the stat stub
+```
+
+Replace `Tools.test_opencode_shared_storage_in_both_sandboxes` and `Tools.test_opencode_nfs_lock_blocks_another_project_before_setup` with:
+
+```python
+    @unittest.skipUnless(sys.platform.startswith("linux"), "uses GNU stat stub")
+    def test_opencode_storage_in_both_sandboxes(self):
+        from agtbox.opencode_store import project_id
+        data = self.tools / "opencode"
+        state = self.home / ".local/state/agent-box/opencode"
+        projects = data / "projects"
+        pid = project_id(str(self.app))
+        for fstype in ("ext2/ext3", "nfs"):
+            (self.stub / "stat").write_text(f"#!/bin/sh\nprintf '{fstype}\\n'\n")
+            for engine in ("bwrap", "podman"):
+                with self.subTest(engine=engine, fstype=fstype):
+                    rc, argv, err = self.launch("-s", engine, "-a", str(self.app), "opencode")
+                    self.assertEqual(rc, 0, err)
+                    if engine == "bwrap":
+                        self.assertArg(argv, str(data))
+                        self.assertArg(argv, str(state))
+                        self.assertArg(argv, "--chdir")
+                    else:
+                        self.assertArg(argv, f"{data}:{self.home}/.local/share/opencode")
+                        self.assertArg(argv, f"{state}:{self.home}/.local/state/opencode")
+                        self.assertArg(argv, "-w")
+                    self.assertArg(argv, "--standalone")
+                    network = fstype == "nfs"
+                    self.assertEqual(any(f"projects/{pid}.db" in arg for arg in argv), network)
+                    self.assertEqual(any("OPENCODE_DB" in arg for arg in argv), network)
+                    self.assertEqual("OpenCode launch lock:" in err, network)
+                    if network:
+                        self.assertEqual((projects / f"{pid}.path").read_text(),
+                                         f"{os.path.realpath(self.app)}\n")
+                        self.assertEqual(list(projects.glob("*.lock")), [])
+                    else:
+                        self.assertFalse(projects.exists())
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "uses GNU stat stub")
+    def test_opencode_nfs_lock_blocks_the_same_project_before_setup(self):
+        from agtbox.opencode_store import project_id
+        (self.stub / "stat").write_text("#!/bin/sh\nprintf 'nfs\\n'\n")
+        lock = self.tools / "opencode/projects" / f"{project_id(str(self.app))}.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text('{"host":"frontend-1","pid":123,"started":"earlier","project":"/other"}')
+        for engine in ("bwrap", "podman"):
+            with self.subTest(engine=engine):
+                rc, argv, err = self.launch("-s", engine, "-a", str(self.app), "opencode")
+                self.assertEqual(rc, 1, err)
+                self.assertNoArg(argv, str(self.tools / "bin/opencode"))
+                self.assertIn("frontend-1", err)
+                self.assertIn("project /other", err)
+                self.assertIn(str(lock), err)
+                self.assertIn("rm --", err)
+                self.assertTrue(lock.exists())
+```
+
+(`ext2/ext3` runs first so the `projects/` directory doesn't exist yet when the local path is checked. The stub engines never create `<id>.db`, so no credential commands run and the argv seen is setup + agent only.)
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `python3 -m unittest test.test_opencode -v`
-Expected: many FAILs/ERRORs, e.g. `KeyError: 'OPENCODE_DB'` in the stub sandbox, and `test_warnings_survive_a_dead_terminal` raising `OSError: [Errno 5] Input/output error`.
+Run: `python3 -m unittest test.test_opencode test.test_agtbox -v`
+Expected: many FAILs/ERRORs, e.g. `KeyError: 'OPENCODE_DB'` in the stub sandbox, `test_warnings_survive_a_dead_terminal` raising `OSError: [Errno 5] Input/output error`, and `test_opencode_storage_in_both_sandboxes` failing on the `projects/<id>.db` assertion.
 
 - [ ] **Step 3: Rewrite `agtbox/agents/opencode.py`**
 
@@ -1293,7 +1386,7 @@ def warn(message):
 
 
 def lock_held_exit(err):
-    """The project-lock contention message (unchanged from the global lock)."""
+    """The project-lock contention message; its wording is kept stable."""
     return SystemExit(
         "Agent Box: OpenCode is already locked by another launch.\n"
         f"Owner: {err.details}\nLock file: {err.path}\n"
@@ -1380,21 +1473,31 @@ class Opencode(Agent):
             return
         if not credentials:
             return
-        code, _ = sandbox.capture(ctx, [self.bin, "auth", "import", "--standalone"],
-                                  stdin=json.dumps(credentials),
-                                  timeout=CREDENTIAL_TIMEOUT, guard=guard)
-        if code != 0:
-            warn(f"`opencode auth import` failed (exit {code}); starting without "
-                 "saved credentials. The next launch tries again.")
+        try:
+            code, _ = sandbox.capture(ctx, [self.bin, "auth", "import", "--standalone"],
+                                      stdin=json.dumps(credentials),
+                                      timeout=CREDENTIAL_TIMEOUT, guard=guard)
+            failure = f"exit {code}" if code != 0 else None
+        except OSError as err:
+            failure = str(err)
+        if failure:
+            warn(f"`opencode auth import` failed ({failure}); this project starts "
+                 "without saved credentials. Log in here once to fix it.")
             # The agent has not run and the lock is held: these files can only
-            # hold what the failed import just created.
+            # hold what the failed import just created. The agent then creates a
+            # fresh database, so this project is not seeded again later.
             for suffix in ("", "-wal", "-shm"):
                 Path(f"{db}{suffix}").unlink(missing_ok=True)
 
     def _push_back(self, sandbox, ctx, guard):
         """Fold this project's credentials into the master."""
-        code, out = sandbox.capture(ctx, [self.bin, "auth", "export", "--standalone"],
-                                    timeout=CREDENTIAL_TIMEOUT, guard=guard)
+        try:
+            code, out = sandbox.capture(ctx, [self.bin, "auth", "export", "--standalone"],
+                                        timeout=CREDENTIAL_TIMEOUT, guard=guard)
+        except OSError as err:
+            warn(f"`opencode auth export` failed ({err}); this session's "
+                 "credentials were not saved for new projects.")
+            return
         if code != 0:
             warn(f"`opencode auth export` failed (exit {code}); this session's "
                  "credentials were not saved for new projects.")
@@ -1422,9 +1525,9 @@ class Opencode(Agent):
                  "left unchanged.")
 ```
 
-- [ ] **Step 4: Run the OpenCode tests**
+- [ ] **Step 4: Run the OpenCode and launcher tests**
 
-Run: `python3 -m unittest test.test_opencode -v`
+Run: `python3 -m unittest test.test_opencode test.test_agtbox -v`
 Expected: all PASS.
 
 - [ ] **Step 5: Run the full suite**
@@ -1435,7 +1538,7 @@ Expected: `OK`.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add agtbox/agents/opencode.py test/test_opencode.py
+git add agtbox/agents/opencode.py test/test_opencode.py test/test_agtbox.py
 git commit -m "opencode: per-project database and lock on network filesystems
 
 Seeds new project databases from a host-only master credential file and
@@ -1449,7 +1552,8 @@ either path for testing."
 
 **Files:**
 - Modify: `README.md` (the OpenCode storage section: from "OpenCode keeps its existing **shared database…" through "…may still need further work.", ~lines 67-104)
-- Modify: `CLAUDE.md` (line 23's last sentence; the paragraphs starting "**OpenCode shared storage and network-filesystem locking.**", "`Opencode.run` checks the backing filesystem…" and "`Sandbox.wait` retains terminal I/O…", ~lines 39-43)
+- Modify: `agtbox/agents/README.md` (~lines 38 and 93)
+- Modify: `CLAUDE.md` (line 30's OpenCode-data sentence; line 23's last sentence; the paragraphs starting "**OpenCode shared storage and network-filesystem locking.**", "`Opencode.run` checks the backing filesystem…" and "`Sandbox.wait` retains terminal I/O…", ~lines 39-43)
 
 - [ ] **Step 1: Replace the README section**
 
@@ -1498,6 +1602,8 @@ project and every new project after it is authenticated. Limits:
 
 - Projects that already have a database don't pick up later logins; log in there
   too if a key changes.
+- If copying the credentials into a new project fails, Agent Box warns and that
+  project starts without them (it isn't retried); log in there once.
 - Logging out in one project doesn't remove the credential from the master.
 - An old project with an outdated key can overwrite a newer one in the master
   when it exits; log in again to fix it.
@@ -1523,20 +1629,28 @@ Replace the three paragraphs (`**OpenCode shared storage and network-filesystem 
 
 Per-project path: `project_id` (`agtbox/opencode_store.py`) = sanitized basename of `realpath(app_dir)` + `-` + 12 hex of its SHA-256. The sandbox gets `OPENCODE_DB=projects/<id>.db` (relative → under the data dir; the launcher `mkdir`s `projects/`, which OpenCode won't). `projects/<id>.path` records the realpath. `projects/<id>.lock` (exclusive create, NFSv3+) is held from before setup until cleanup; it is inside the sandbox-visible data bind by choice (debuggable), so an agent could delete it. `launch_lock` raises `LockHeld`; the project lock turns it into the duplicate-launch `SystemExit` (host, PID, start, project, `rm --` line); no stale-lock guessing; inode check so an old owner never removes a replacement. The old shared `opencode.db` is never touched on this path.
 
-Credentials: master `~/.local/share/agent-box/opencode/credentials.json` (outside the arch dir and every bind; dir 0700, file 0600, `mkstemp`+`fsync`+`os.replace`), guarded by `credentials.lock` (no retry: contention warns and skips). New project (`<id>.db` absent, checked under the lock before any command) + non-empty master → `opencode auth import --standalone` with the master on stdin; failure warns and deletes the just-created `<id>.db{,-wal,-shm}`. After the agent exits (any status), if `<id>.db` exists → `opencode auth export --standalone`, merged by `merge_credentials`: by `id`, insert inactive / replace keeping `active`; per integration the export's first active credential becomes the only active one; master-only entries kept; no stale protection. Both commands run via `Sandbox.capture` (no TTY — podman `build_run_argv(..., tty=False)` drops `-t`; own session so Ctrl-C can't hit them; 60 s timeout). Warnings after the agent are best-effort (`OSError` on stderr swallowed).
+Credentials: master `~/.local/share/agent-box/opencode/credentials.json` (outside the arch dir and every bind; dir 0700, file 0600, `mkstemp`+`fsync`+`os.replace`), guarded by `credentials.lock` (no retry: contention warns and skips). New project (`<id>.db` absent, checked under the lock before any command) + non-empty master → `opencode auth import --standalone` with the master on stdin; failure (or spawn `OSError`) warns "log in here" and deletes the just-created `<id>.db{,-wal,-shm}` before the agent starts — the agent then creates a fresh DB, so the seed is not retried. After the agent exits (any status), if `<id>.db` exists → `opencode auth export --standalone`, merged by `merge_credentials`: by `id`, insert inactive / replace keeping `active`; per integration the export's first active credential becomes the only active one; master-only entries kept; no stale protection. Both commands run via `Sandbox.capture` (no TTY — podman `build_run_argv(..., tty=False)` drops `-t`; own session so Ctrl-C can't hit them; 60 s timeout). Warnings after the agent are best-effort (`OSError` on stderr swallowed).
 
-Signals: `SignalGuard` (`agtbox/sandboxes/base.py`) forwards SIGTERM/SIGHUP to the attached child, records them when none is attached (delivered to the agent if it hasn't started yet, never to credential commands), and runs a Python no-op for SIGINT (terminal Ctrl-C already signals the foreground group; not SIG_IGN, so the child keeps default handling). SIGHUP must be forwarded because a terminal hangup can signal only the launcher as session leader. `Sandbox.wait(ctx, guard=None)` uses its own guard unless given one; OpenCode's per-project path holds one guard from lock to release, so a SIGTERM (e.g. Slurm) stops the agent but the push-back and lock cleanup still run. Exit status is the agent's. Crash/SIGKILL may leave locks. Other agents still use exec.
+Signals: `SignalGuard` (`agtbox/sandboxes/base.py`) forwards SIGTERM/SIGHUP to the attached child and, unless that child is the agent, also records them; recorded signals are delivered to the agent when it starts (so a SIGTERM during setup or the seed import still stops it) and never to credential commands; and runs a Python no-op for SIGINT (terminal Ctrl-C already signals the foreground group; not SIG_IGN, so the child keeps default handling). SIGHUP must be forwarded because a terminal hangup can signal only the launcher as session leader. `Sandbox.wait(ctx, guard=None)` uses its own guard unless given one; OpenCode's per-project path holds one guard from lock to release, so a SIGTERM (e.g. Slurm) stops the agent but the push-back and lock cleanup still run. Exit status is the agent's. Crash/SIGKILL may leave locks. Other agents still use exec.
 ```
 
-- [ ] **Step 3: Check nothing references the removed global lock**
+Also in `CLAUDE.md`, in the `~/.local/share/agent-box/<arch>` bullet, replace "OpenCode data (including its database and v2 credentials) also lives here under `opencode/`, shared by projects using this architecture." with "OpenCode data also lives here under `opencode/`: the shared `opencode.db` on local disks, or one `projects/<id>.db` per project on network filesystems (master credentials are kept outside, in `~/.local/share/agent-box/opencode/`)."
 
-Run: `grep -rn "launch\.lock\|opencode-<arch>\|global launch lock\|global lock" README.md CLAUDE.md agtbox`
+- [ ] **Step 3: Update `agtbox/agents/README.md`**
+
+In the `run(sandbox, ctx)` row of the attribute table (~line 38), replace "On a network filesystem, OpenCode holds its shared launch lock across setup and `sandbox.wait(ctx)`, which forwards termination signals and returns the exit status." with "On a network filesystem, OpenCode uses a per-project database and lock, held across setup, credential seeding, `sandbox.wait(ctx)` (which forwards termination signals and returns the exit status) and the credential push-back."
+
+Near the end (~line 93), replace "data/state/config/cache and a conditional network-filesystem launch lock)" with "data/state/config/cache, and per-project databases and locks on network filesystems)".
+
+- [ ] **Step 4: Check nothing references the removed global lock**
+
+Run: `grep -rn "launch\.lock\|opencode-<arch>\|global launch lock\|global lock\|shared launch lock" README.md CLAUDE.md agtbox`
 Expected: no output.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add README.md CLAUDE.md
+git add README.md CLAUDE.md agtbox/agents/README.md
 git commit -m "docs: per-project OpenCode databases and master credentials"
 ```
 

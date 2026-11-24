@@ -118,10 +118,13 @@ the host **after** acquiring the project lock and before any sandbox command run
 If new and the master exists and holds a non-empty JSON array, run
 `opencode auth import --standalone` in the sandbox with the master on stdin. If the
 master is absent, empty, or unreadable/invalid (warn for the latter), nothing runs
-and the project stays "new" until a master exists. If the import exits non-zero,
-warn and delete `<id>.db`, `<id>.db-wal`, `<id>.db-shm` — those can only contain what
-the failed import itself just created (the agent has not run yet; the lock is held),
-so the next launch retries the seed. A DB the agent has used is never deleted.
+and the project stays "new" until a master exists. If the import fails (non-zero,
+timeout, or the command can't start), warn that this project starts without saved
+credentials and the user should log in there, and delete `<id>.db`, `<id>.db-wal`,
+`<id>.db-shm` — those can only contain what the failed import itself just created
+(the agent has not run yet; the lock is held). The agent then starts and creates a
+fresh DB, so the project is **not** seeded again later; a failed seed is rare and
+logging in once in that project fixes it. A DB the agent has used is never deleted.
 
 **Push back (every launch whose DB exists).** After the agent exits — any exit status,
 including after SIGINT/SIGTERM/SIGHUP — and while still holding the project lock:
@@ -173,7 +176,10 @@ Change: the handler installation becomes a reusable context manager that
 `Opencode.run` holds from just after acquiring the project lock until just before
 releasing it (setup, seed, agent, export, merge). `wait()` keeps forwarding signals
 to the agent while it runs; outside the agent, a received SIGTERM/SIGHUP is
-recorded rather than acted on. `capture` children are started in their own process
+recorded and delivered to the agent when it starts (also when it was forwarded to a
+credential command at the time — so a SIGTERM during the seed import still stops
+the agent instead of being lost); after the agent has exited, recorded signals
+have no further effect. `capture` children are started in their own process
 group (`start_new_session=True`) so terminal Ctrl-C doesn't reach them; a received
 SIGTERM/SIGHUP is forwarded to a running `capture` child (the 60 s timeout bounds it
 either way). The launcher's exit status is the agent's.
@@ -198,10 +204,10 @@ Warnings printed after the agent exits are best-effort: a failed write to stderr
 All warnings: `Agent Box: warning: …` on stderr, best-effort; none change the exit
 status.
 
-- Seed failure (unreadable/invalid master, import non-zero or timeout): warn; delete
-  the just-created DB files as above; launch anyway.
-- Push-back failure (export non-zero/timeout, invalid JSON, write error): warn; the
-  master is left as it was.
+- Seed failure (unreadable/invalid master, import non-zero, timeout, or spawn
+  `OSError`): warn; delete the just-created DB files as above; launch anyway.
+- Push-back failure (export non-zero/timeout/spawn `OSError`, invalid JSON, write
+  error): warn; the master is left as it was.
 - Master lock held (`LockHeld`): warn that this session's credential changes were not
   saved to the master, with the owner details and the `rm -- …/credentials.lock`
   recovery line (in case a crash left it behind). No retry: the other session is
@@ -241,8 +247,11 @@ Stub-sandbox tests (existing pattern):
 - Two different projects run concurrently; the same project is blocked with the
   owner message.
 - Import runs only when the DB did not exist and the master is a non-empty array;
-  master content is delivered on stdin. A failed import deletes the new DB files and
-  the next launch seeds again.
+  master content is delivered on stdin. A failed import deletes the new DB files
+  before the agent starts and warns to log in; the project is not re-seeded later.
+- A SIGTERM received during the seed import is delivered to the agent when it starts.
+- `test/test_agtbox.py`'s stub-launcher OpenCode tests check the per-project
+  `OPENCODE_DB`, `.path` and lock instead of the old global lock.
 - No export when the agent never created the DB.
 - Export + merge run after a non-zero agent exit, after SIGTERM to the launcher, and
   a SIGINT during the export doesn't lose the agent's exit status or leave the lock.
@@ -257,7 +266,8 @@ interactive terminal.
 
 ## Docs
 
-Update the OpenCode storage/locking sections of `CLAUDE.md` and `README.md`:
+Update the OpenCode storage/locking sections of `CLAUDE.md`, `README.md` and
+`agtbox/agents/README.md`:
 per-project DBs on network filesystems, the `projects/` layout, project-ID caveats,
 the master credential file and its semantics (seed new projects only, push back on
 exit, no logout propagation, no stale protection, a contended master lock skips one
