@@ -89,7 +89,7 @@ class Opencode(Agent):
         pid = project_id(ctx.app_dir)
         lock = projects / f"{pid}.lock"
         try:
-            with launch_lock(lock, ctx.app_dir), SignalGuard() as guard:
+            with SignalGuard() as guard, launch_lock(lock, ctx.app_dir):
                 code = self._locked_run(sandbox, ctx, projects, pid, guard)
         except LockHeld as err:
             raise lock_held_exit(err) from None

@@ -53,14 +53,17 @@ class SignalGuard:
         return False
 
     def attach(self, child, deliver_pending):
-        self.child = child
+        # Mark the child's role before publishing it, so a signal landing between
+        # the two assignments is not both forwarded to the agent and recorded.
         self._child_is_agent = deliver_pending
+        self.child = child
         if deliver_pending:
             pending, self.pending = self.pending, []
             for signum in pending:
                 child.send_signal(signum)
 
     def detach(self):
+        # Unpublish the child first: from then on every signal is recorded.
         self.child = None
         self._child_is_agent = False
 
@@ -119,7 +122,14 @@ class Sandbox(ABC):
             with subprocess.Popen(self.build_run_argv(ctx)) as child:
                 active.attach(child, deliver_pending=True)
                 try:
-                    code = child.wait()
+                    # Poll: a signal landing just before a blocking waitpid would
+                    # defer its Python handler (the forward) until the child exits.
+                    while True:
+                        try:
+                            code = child.wait(timeout=0.5)
+                            break
+                        except subprocess.TimeoutExpired:
+                            pass
                 finally:
                     active.detach()
         return code if code >= 0 else 128 - code
@@ -133,7 +143,8 @@ class Sandbox(ABC):
         it and returns (CAPTURE_TIMEOUT_CODE, "").
         """
         argv = self.build_run_argv(ctx, cmd, tty=False)
-        with subprocess.Popen(argv, text=True, start_new_session=True,
+        with subprocess.Popen(argv, encoding="utf-8", errors="replace",
+                              start_new_session=True,
                               stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
                               stdout=subprocess.PIPE) as child:
             if guard is not None:

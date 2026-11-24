@@ -97,7 +97,7 @@ class Wait(unittest.TestCase):
             handlers[signum] = handler
             return old
 
-        def wait():
+        def wait(timeout=None):
             handlers[signal.SIGTERM](signal.SIGTERM, None)
             handlers[signal.SIGHUP](signal.SIGHUP, None)
             return -signal.SIGTERM
@@ -123,7 +123,7 @@ class Wait(unittest.TestCase):
 
         installed = {}
 
-        def wait():
+        def wait(timeout=None):
             installed[signal.SIGINT] = handlers[signal.SIGINT]
             handlers[signal.SIGINT](signal.SIGINT, None)
             return 0
@@ -137,6 +137,27 @@ class Wait(unittest.TestCase):
         for handler in installed.values():
             # SIG_IGN would be inherited across exec and make the agent ignore Ctrl-C.
             self.assertTrue(callable(handler))
+
+    def test_polls_so_a_signal_during_the_wait_is_forwarded_promptly(self):
+        child = mock.MagicMock()
+        child.__enter__.return_value = child
+        guard = sandbox_base.SignalGuard()
+        timeouts = []
+
+        def wait(timeout=None):
+            timeouts.append(timeout)
+            if len(timeouts) == 1:
+                guard._forward(signal.SIGTERM, None)  # arrives while blocked
+                raise subprocess.TimeoutExpired("fake", timeout)
+            return 0
+
+        child.wait.side_effect = wait
+        with mock.patch("agtbox.sandboxes.base.subprocess.Popen", return_value=child), \
+             mock.patch.object(FakeSandbox, "build_run_argv", return_value=["fake"]):
+            self.assertEqual(FakeSandbox().wait(None, guard=guard), 0)
+        child.send_signal.assert_called_once_with(signal.SIGTERM)
+        self.assertEqual(len(timeouts), 2)
+        self.assertTrue(all(t is not None for t in timeouts))  # never blocks unbounded
 
     def test_spawn_failure_restores_signal_handlers(self):
         signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
@@ -201,6 +222,13 @@ class Capture(unittest.TestCase):
         self.assertEqual(sandbox.capture(None, ["x"], timeout=1), (124, ""))
         self.assertLess(time.monotonic() - start, 10)
 
+    def test_capture_tolerates_invalid_utf8(self):
+        sandbox = ScriptSandbox("import sys; sys.stdout.buffer.write(b'\\xff\\xfe[]')")
+        code, out = sandbox.capture(None, ["x"])
+        self.assertEqual(code, 0)
+        self.assertIsInstance(out, str)
+        self.assertTrue(out.endswith("[]"))
+
     def test_capture_runs_in_its_own_session(self):
         sandbox = ScriptSandbox("import os; print(os.getsid(0) == os.getpid(), end='')")
         self.assertEqual(sandbox.capture(None, ["x"]), (0, "True"))
@@ -226,6 +254,35 @@ class Guard(unittest.TestCase):
         guard._forward(signal.SIGTERM, None)          # to the agent only, not recorded
         self.assertEqual(agent.send_signal.call_count, 3)
         self.assertEqual(guard.pending, [])
+
+    def _racing_guard(self):
+        """A guard that receives SIGTERM right after the first role/child assignment."""
+        class Racing(sandbox_base.SignalGuard):
+            armed = False
+
+            def __setattr__(self, name, value):
+                super().__setattr__(name, value)
+                if self.armed and name in ("child", "_child_is_agent"):
+                    super().__setattr__("armed", False)
+                    self._forward(signal.SIGTERM, None)
+        return Racing()
+
+    def test_signal_during_attach_reaches_agent_exactly_once(self):
+        guard = self._racing_guard()
+        agent = mock.Mock()
+        guard.armed = True
+        guard.attach(agent, deliver_pending=True)
+        agent.send_signal.assert_called_once_with(signal.SIGTERM)
+        self.assertEqual(guard.pending, [])
+
+    def test_signal_during_detach_is_recorded(self):
+        guard = self._racing_guard()
+        agent = mock.Mock()
+        guard.attach(agent, deliver_pending=True)
+        guard.armed = True
+        guard.detach()
+        agent.send_signal.assert_not_called()
+        self.assertEqual(guard.pending, [signal.SIGTERM])
 
     def test_wait_uses_callers_guard_without_restoring_handlers(self):
         child = mock.MagicMock()
@@ -271,9 +328,11 @@ print(code, out.strip(), flush=True)
                 out, err = launcher.communicate(timeout=10)
                 return launcher.returncode, out, err
             finally:
-                if launcher.poll() is None:
-                    launcher.kill()
-                    launcher.wait(timeout=5)
+                try:
+                    os.killpg(launcher.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                launcher.wait(timeout=5)
 
     def test_ctrl_c_during_capture_does_not_interrupt_it(self):
         code, out, err = self._launcher(signal.SIGINT)

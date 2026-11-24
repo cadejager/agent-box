@@ -497,10 +497,14 @@ from pathlib import Path
 from agtbox.locking import filesystem_type, launch_lock
 from agtbox.sandboxes.bwrap import Bwrap
 worker = '''
-import signal, sys
+import signal, sys, time
 signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(42))
 print('ready', flush=True)
-signal.pause()
+# Not signal.pause(): a signal landing just before it would block forever.
+deadline = time.time() + 5
+while time.time() < deadline:
+    time.sleep(0.05)
+sys.exit(1)
 '''
 sandbox = Bwrap()
 sandbox.build_run_argv = lambda ctx: [sys.executable, '-c', worker]
@@ -510,7 +514,7 @@ with launch_lock(Path(sys.argv[1]), '/project'):
         with subprocess.Popen([sys.executable, "-c", script, str(self.lock)],
                               cwd=Path(__file__).resolve().parents[1],
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              text=True) as launcher:
+                              text=True, start_new_session=True) as launcher:
             try:
                 self.assertTrue(select.select([launcher.stdout], [], [], 5)[0])
                 self.assertEqual(launcher.stdout.readline(), "ready\n")
@@ -520,9 +524,12 @@ with launch_lock(Path(sys.argv[1]), '/project'):
                 self.assertEqual(launcher.returncode, 42, stderr)
                 self.assertFalse(self.lock.exists())
             finally:
-                if launcher.poll() is None:
-                    launcher.kill()
-                    launcher.wait(timeout=5)
+                # Also clean up the worker if a regression leaves it running.
+                try:
+                    os.killpg(launcher.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                launcher.wait(timeout=5)
 
 
     def test_terminal_hangup_reaches_sandbox_and_releases_lock(self):
@@ -534,15 +541,17 @@ from agtbox.sandboxes.bwrap import Bwrap
 # This launcher is the session leader; acquire stdin as its controlling terminal.
 fcntl.ioctl(sys.stdin.fileno(), termios.TIOCSCTTY, 0)
 worker = '''
-import signal, sys
+import signal, sys, time
 from pathlib import Path
 def hangup(signum, frame):
     # The lock must remain held until the worker has finished shutting down.
     sys.exit(42 if Path(sys.argv[1]).exists() else 43)
 signal.signal(signal.SIGHUP, hangup)
 print('ready', flush=True)
-while True:
-    signal.pause()
+deadline = time.time() + 5
+while time.time() < deadline:
+    time.sleep(0.05)
+sys.exit(1)
 '''
 sandbox = Bwrap()
 sandbox.build_run_argv = lambda ctx: [sys.executable, '-c', worker, sys.argv[1]]
@@ -594,7 +603,9 @@ def handler(signum, frame):
     count += 1
 signal.signal(signal.SIGINT, handler)
 print('ready', flush=True)
-signal.pause()
+deadline = time.time() + 5
+while not count and time.time() < deadline:
+    time.sleep(0.05)
 time.sleep(0.5)
 sys.exit(count)
 '''
@@ -615,9 +626,12 @@ with launch_lock(Path(sys.argv[1]), '/project'):
                 self.assertEqual(launcher.returncode, 1, stderr)
                 self.assertFalse(self.lock.exists())
             finally:
-                if launcher.poll() is None:
-                    launcher.kill()
-                    launcher.wait(timeout=5)
+                # Also clean up the worker if a regression leaves it running.
+                try:
+                    os.killpg(launcher.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                launcher.wait(timeout=5)
 
 
 class NetworkLaunch(unittest.TestCase):
@@ -635,12 +649,15 @@ with mock.patch.multiple(core, HOME=str(home), AGENT_TOOLS=str(home / "tools"),
     from agtbox.context import RunContext
     from agtbox.sandboxes.bwrap import Bwrap
     agent_worker = '''
-import signal, sys
+import signal, sys, time
 from pathlib import Path
 Path(sys.argv[1]).touch()
 signal.signal(signal.SIGTERM, lambda s, f: sys.exit(42))
 print("ready", flush=True)
-signal.pause()
+deadline = time.time() + 10
+while time.time() < deadline:
+    time.sleep(0.05)
+sys.exit(1)
 '''
     export = ('[{"id": "cred_1", "integrationID": "openai", "label": "API key", '
               '"active": true, "value": {"type": "key", "key": "sk-test"}}]')
@@ -666,7 +683,7 @@ signal.pause()
             with subprocess.Popen([sys.executable, "-c", script, str(home)],
                                   cwd=Path(__file__).resolve().parents[1], env=env,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  text=True) as launcher:
+                                  text=True, start_new_session=True) as launcher:
                 try:
                     self.assertTrue(select.select([launcher.stdout], [], [], 10)[0])
                     self.assertEqual(launcher.stdout.readline(), "ready\n")
@@ -674,9 +691,12 @@ signal.pause()
                     _, stderr = launcher.communicate(timeout=20)
                     self.assertEqual(launcher.returncode, 42, stderr)
                 finally:
-                    if launcher.poll() is None:
-                        launcher.kill()
-                        launcher.wait(timeout=5)
+                    # Also clean up the agent if a regression leaves it running.
+                    try:
+                        os.killpg(launcher.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    launcher.wait(timeout=5)
             master = json.loads((home / "opencode" / "credentials.json").read_text())
             self.assertEqual([c["id"] for c in master], ["cred_1"])
             self.assertEqual(list((home / "tools/opencode/projects").glob("*.lock")), [])
