@@ -1,6 +1,6 @@
 ---
 name: agent-box
-description: Read this before saying a tool, CLI, library or language version is missing, and whenever you hit "command not found", "No module named", pip "externally-managed" or read-only errors, or need a newer Python/Node, a linter/formatter/build tool (cmake, ruff, prettier, tsc, shellcheck…), or GitHub/GitLab access. You are in an Agent Box sandbox (PATH starts with ~/.local/share/agent-box): no root, but uv/uvx/npm/npx can install almost anything without asking the user.
+description: Read this before saying a tool, CLI, library or language version is missing, and whenever you hit "command not found", "No module named", pip "externally-managed" or read-only errors, or need a newer Python/Node, a linter/formatter/build tool (cmake, ruff, prettier, tsc, shellcheck…), or GitHub/GitLab access. You are in an Agent Box sandbox (PATH starts with ~/.local/share/agent-box) — no root, but uv/uvx/npm/npx can install almost anything without asking the user.
 ---
 
 # Agent Box sandbox
