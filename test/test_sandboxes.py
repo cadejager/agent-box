@@ -50,6 +50,12 @@ class BindArgs(unittest.TestCase):
         self.assertIn("B:/rw>/rw", out)
         self.assertIn("B:/ro>/ro:ro", out)
 
+    def test_ro_bind_is_read_only(self):
+        from agtbox.core import Bind
+        ctx = RunContext(agent=None, binds=[Bind("/skill", "/h/.agents/skills/x", "ro")],
+                         env=[], app_dir="/app", extra_args=[])
+        self.assertIn("B:/skill>/h/.agents/skills/x:ro", FakeSandbox().bind_args(ctx))
+
 
 class RunSetup(unittest.TestCase):
     def _ctx(self, agent):

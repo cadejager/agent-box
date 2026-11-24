@@ -101,7 +101,7 @@ class Sandbox(ABC):
         for b in ctx.binds:
             if b.kind == "seed":
                 continue
-            args += self.fmt_bind(b.src, b.dst, False)
+            args += self.fmt_bind(b.src, b.dst, b.kind == "ro")
         for m in ctx.volumes:
             args += self.fmt_bind(m, m, False)
         for m in ctx.ro_volumes:

@@ -14,4 +14,5 @@ class Claude(Agent):
         return [
             core.Bind(f"{core.AGENT_CONFIG}/claude", f"{core.HOME}/.claude"),
             core.Bind(f"{core.AGENT_CONFIG}/claude.json", f"{core.HOME}/.claude.json", "file"),
+            core.skill_bind(f"{core.HOME}/.claude/skills"),
         ]

@@ -14,12 +14,23 @@ AGENT_CONFIG = f"{HOME}/.config/agent-box"
 AGENT_STATE = f"{HOME}/.local/state/agent-box"
 AGENT_CACHE = f"{HOME}/.cache/agent-box"
 IMAGE = "agent-box"
+# Skill shipped with the launcher, bound read-only into each agent's skills dir
+# so it sits beside (never replaces) the agent's own skills.
+SKILL_NAME = "agent-box"
+SKILL_SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "skills", SKILL_NAME)
+
+
+def skill_bind(skills_dir):
+    """A read-only Bind of the bundled skill at <skills_dir>/<SKILL_NAME>."""
+    return Bind(SKILL_SRC, f"{skills_dir}/{SKILL_NAME}", "ro")
 
 
 @dataclass
 class Bind:
     """A host->sandbox mount. kind: 'dir'/'file' both emit a bind arg (file is
-    seeded '{}' if absent); 'seed' emits NO bind arg -- it is written inside an
+    seeded '{}' if absent); 'ro' is a read-only bind of an existing
+    host path (never created); 'seed' emits NO bind arg -- it is written inside an
     already-bound dir (see core.ensure_sources)."""
     src: str
     dst: str
@@ -38,6 +49,8 @@ AGENT_ENV = [
     f"UV_CACHE_DIR={AGENT_CACHE}/uv",
     f"UV_TOOL_DIR={AGENT_TOOLS}/uv/tools",
     f"UV_TOOL_BIN_DIR={AGENT_TOOLS}/bin",
+    f"UV_PYTHON_INSTALL_DIR={AGENT_TOOLS}/uv/python",
+    f"UV_PYTHON_BIN_DIR={AGENT_TOOLS}/bin",
 ]
 # Generic (non-agent) env, applied for every agent. Agent-specific vars
 # (ANTHROPIC_*, OPENAI_*, OPENCODE_*, CLAUDE_CODE_*) live on the agent plugins.

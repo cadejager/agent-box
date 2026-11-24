@@ -74,6 +74,7 @@ class Opencode(Agent):
             core.Bind(f"{core.AGENT_TOOLS}/opencode", f"{core.HOME}/.local/share/opencode"),
             core.Bind(f"{core.AGENT_STATE}/opencode", f"{core.HOME}/.local/state/opencode"),
             core.Bind(f"{core.AGENT_CACHE}/opencode", f"{core.HOME}/.cache/opencode"),
+            core.skill_bind(f"{core.HOME}/.agents/skills"),
         ]
 
     def run(self, sandbox, ctx):

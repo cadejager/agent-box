@@ -9,4 +9,7 @@ class Codex(Agent):
 
     @property
     def binds(self):
-        return [core.Bind(f"{core.AGENT_CONFIG}/codex", f"{core.HOME}/.codex")]
+        return [
+            core.Bind(f"{core.AGENT_CONFIG}/codex", f"{core.HOME}/.codex"),
+            core.skill_bind(f"{core.HOME}/.agents/skills"),
+        ]

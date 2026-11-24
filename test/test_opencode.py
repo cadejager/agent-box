@@ -94,7 +94,8 @@ class SharedStorage(unittest.TestCase):
         self.data = self.home / "tools/opencode"
         self.projects = self.data / "projects"
         for bind in Opencode().binds:
-            Path(bind.src).mkdir(parents=True)
+            if bind.kind != "ro":  # the bundled skill already exists in the repo
+                Path(bind.src).mkdir(parents=True)
         self.project = self.home / "project"
         self.project.mkdir()
 
@@ -145,7 +146,7 @@ class SharedStorage(unittest.TestCase):
     def test_projects_share_existing_data_state_config_and_cache(self):
         first, second = self.context("/one"), self.context("/two")
         self.assertEqual(first.binds, second.binds)
-        sources = {bind.dst: bind.src for bind in first.binds}
+        sources = {bind.dst: bind.src for bind in first.binds if bind.kind != "ro"}
         self.assertEqual(sources, {
             f"{self.home}/.config/opencode": f"{core.AGENT_CONFIG}/opencode",
             f"{self.home}/.local/share/opencode": f"{core.AGENT_TOOLS}/opencode",
