@@ -50,19 +50,28 @@ wherever the tool looks:
 - `core.AGENT_CONFIG` — config (`~/.config/agent-box`)
 - `core.AGENT_TOOLS` — data / installed files (`~/.local/share/agent-box/<arch>`)
 - `core.AGENT_STATE` — state (`~/.local/state/agent-box`)
-- `core.AGENT_CACHE` — disposable cache (`~/.cache/agent-box`)
+- `core.AGENT_CACHE` — disposable cache (`~/.cache/agent-box`; use a per-arch
+  subdir, `{core.AGENT_CACHE}/{core.ARCH}/<agent>`, when it holds native binaries)
 
 `kind` (default `"dir"`):
 
 - `"dir"` — bind the directory (created on the host if absent).
 - `"file"` — bind a single file, seeded with `{}` if absent (for tools that
   demand a valid-JSON file, e.g. `~/.claude.json`).
+- `"ro"` — bind an **existing** path read-only (e.g. the bundled skill via
+  `core.skill_bind`). Never created: if the source is missing the launcher exits
+  with a clear error.
 - `"seed"` — **not mounted**; an empty file created inside an already-bound dir,
   for tools that write via temp-file-and-rename and can't have the target itself
   be a mountpoint (this is how the shared git config is handled).
 
 You do **not** declare git/gh/glab/ssh here — those are shared infrastructure
 that `core.SHARED_BINDS` provides to every agent automatically.
+
+If the agent supports skills, also add `core.skill_bind(<its skills dir>)`
+(e.g. `~/.claude/skills`, `~/.agents/skills`). It mounts the bundled
+`skills/agent-box` read-only *inside* that dir, beside the user's own skills.
+`bash` deliberately has none.
 
 ## Worked example
 

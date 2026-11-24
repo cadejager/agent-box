@@ -73,7 +73,8 @@ class Opencode(Agent):
             core.Bind(f"{core.AGENT_CONFIG}/opencode", f"{core.HOME}/.config/opencode"),
             core.Bind(f"{core.AGENT_TOOLS}/opencode", f"{core.HOME}/.local/share/opencode"),
             core.Bind(f"{core.AGENT_STATE}/opencode", f"{core.HOME}/.local/state/opencode"),
-            core.Bind(f"{core.AGENT_CACHE}/opencode", f"{core.HOME}/.cache/opencode"),
+            core.Bind(f"{core.AGENT_CACHE}/{core.ARCH}/opencode", f"{core.HOME}/.cache/opencode"),
+            core.skill_bind(f"{core.HOME}/.agents/skills"),
         ]
 
     def run(self, sandbox, ctx):

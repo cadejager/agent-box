@@ -50,6 +50,12 @@ class BindArgs(unittest.TestCase):
         self.assertIn("B:/rw>/rw", out)
         self.assertIn("B:/ro>/ro:ro", out)
 
+    def test_ro_bind_is_read_only(self):
+        from agtbox.core import Bind
+        ctx = RunContext(agent=None, binds=[Bind("/skill", "/h/.agents/skills/x", "ro")],
+                         env=[], app_dir="/app", extra_args=[])
+        self.assertIn("B:/skill>/h/.agents/skills/x:ro", FakeSandbox().bind_args(ctx))
+
 
 class RunSetup(unittest.TestCase):
     def _ctx(self, agent):
@@ -729,3 +735,12 @@ class IdentityFiles(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RoBindFormatting(unittest.TestCase):
+    def test_real_sandboxes_emit_read_only_binds(self):
+        from agtbox.sandboxes.bwrap import Bwrap
+        from agtbox.sandboxes.podman import Podman
+        self.assertEqual(Bwrap().fmt_bind("/s", "/d", True), ["--ro-bind", "/s", "/d"])
+        self.assertEqual(Bwrap().fmt_bind("/s", "/d", False), ["--bind", "/s", "/d"])
+        self.assertEqual(Podman().fmt_bind("/s", "/d", True), ["-v", "/s:/d:ro"])
